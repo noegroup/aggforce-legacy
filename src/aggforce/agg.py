@@ -95,6 +95,70 @@ def project_forces(
     return to_return
 
 
+def project_forces_cv(cv_arg_dict, forces, n_folds=5, *args, **kwargs):
+    """A slim wrapper function to perform cross validation over project_forces.
+
+    Note: this function does not choose an optimal model. Instead, it performs
+    cross validation for each parameter listed in cv_arg_dict. You should use
+    this to select an optimal hyperparameter and then train a production model.
+
+    Note: xyz is not split up into folds like forces. When we have added
+    nonlinear methods we will have to rethink this.
+
+    Arguments
+    ---------
+    cv_arg_dict (dictionary):
+        Contains arguments to run cross validation over. Must be of the
+        following (limited) form: {<argument_name>:[arg_val_1,arg_val2,...]}.
+        Each val is passed to project_forces as argument_name=arg_val_1.
+
+        Note: Currently, it is only possible to scan over one parameter.
+        Therefore, cv_arg_dict must of length 1.
+    forces (numpy.ndarray):
+        See project_forces; it is split into CV folds before being passed to
+        project_forces.
+    n_folds (positive integer):
+        Number of cross validation folds to use.
+    *args/**kwargs:
+        Passed to project_forces.
+
+    Returns
+    -------
+    dictionary composed of <parameter>:<holdout score>, where parameter is each
+    in cv_arg_dict's only value and holdout_score is force_smoothness evaluated
+    each fold and then averaged.
+
+    """
+    # make fold indices
+    n_frames = forces.shape[0]
+    frames = np.arange(n_frames)
+    _ = np.random.shuffle(frames)
+    chunked_frame_inds = np.array_split(ary=frames, indices_or_sections=n_folds, axis=0)
+
+    # create sequence of indices which are outside each fold (for training)
+    compl_chunked_frame_inds = []
+    for ind, _ in enumerate(chunked_frame_inds):
+        outside_chunks = [x for i, x in enumerate(chunked_frame_inds) if i != ind]
+        compl_chunked_frame_inds.append(np.concatenate(outside_chunks))
+
+    cv_arg_name = list(cv_arg_dict.keys())[0]
+    cv_results = {}
+    # iterate over values of parameter
+    for cv_arg in cv_arg_dict[cv_arg_name]:
+        cv_fold_scores = []
+        combined_kwargs = dict(kwargs, **{cv_arg_name: cv_arg})
+        # iterate over folds
+        for train_inds, val_inds in zip(compl_chunked_frame_inds, chunked_frame_inds):
+            train_forces = forces[train_inds]
+            trained_map = project_forces(forces=train_forces, *args, **combined_kwargs)[
+                "map"
+            ]
+            val_forces = forces[val_inds]
+            cv_fold_scores.append(force_smoothness(trained_map(val_forces)))
+        cv_results.update({cv_arg: sum(cv_fold_scores) / len(cv_fold_scores)})
+    return cv_results
+
+
 def force_smoothness(array):
     r"""Calculates the mean squared element of an array.
 
