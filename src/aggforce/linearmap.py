@@ -126,6 +126,7 @@ def qp_linear_map(
     forces,
     config_mapping,
     constrained_inds=None,
+    l2_regularization=0.0,
     xyz=None,
     solver_args=dict(
         solver="osqp",
@@ -150,6 +151,9 @@ def qp_linear_map(
     constrained_inds (set of frozensets):
         Each entry is a frozenset of indices, the group of which is constrained.
         Currently, only bond constraints (frozensets of size 2) are supported.
+    l2_regularization (float):
+        if positive, a l2 normalization of the (full) mapping vector is applied
+        with this coefficient.
     xyz (None):
         Ignored. Included for compatibility with the interface of other methods.
     solver_args (dict):
@@ -169,6 +173,10 @@ def qp_linear_map(
     qp_mat = np.matmul(reg_mat.T, reg_mat)
     zero_q = np.zeros(qp_mat.shape[0])
     per_site_maps = []
+    # since we want to penalize the norm of the expanded vector, we add
+    # con_mat.t*con_mat
+    if l2_regularization > 0.0:
+        qp_mat += l2_regularization * np.matmul(con_mat.T, con_mat)
     # run solver
     for ind in range(config_mapping.n_cg_sites):
         sbasis = np.zeros(config_mapping.n_cg_sites)
