@@ -96,11 +96,10 @@ def project_forces(
 
 
 def force_smoothness(array):
-    r"""Calculates the sum squared element of an array divided by the size of
-    the first axis.
+    r"""Calculates the mean squared element of an array.
 
-    This corresponds to a finite sum approximate of E[||x||^2_2], which we is
-    often used as a metric of quality for force-maps.
+    This is proportional to a finite sum approximate of E[||x||^2_2], which
+    is often used as a metric of quality for force-maps.
     """
 
-    return np.sum(array**2)/array.shape[0]
+    return np.mean(array**2)
