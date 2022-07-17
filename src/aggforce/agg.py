@@ -18,7 +18,7 @@ def project_forces(
     xyz,
     forces,
     config_mapping,
-    constrained_inds='auto',
+    constrained_inds="auto",
     method=linearmap.qp_linear_map,
     only_return_forces=False,
     **kwargs
