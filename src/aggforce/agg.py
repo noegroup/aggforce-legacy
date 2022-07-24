@@ -40,8 +40,8 @@ def project_forces(
     forces (np.ndarray):
         Three dimensional array of shape (n_steps,n_sites,n_dims). Contains the
         forces on the fg sites as a function of time.
-    config_mapping (linearmap.LinearMap):
-        LinearMap  characterizing the fg -> cg configurational map.
+    config_mapping (map.LinearMap):
+        LinearMap characterizing the fg -> cg configurational map.
     constrained_inds (set of frozensets or 'auto'):
         If a set of frozensets, then each entry is a frozenset of indices, the
         group of which is constrained.  Currently, only bond constraints (frozen
@@ -66,7 +66,7 @@ def project_forces(
         projected_force =
             np.ndarray of shape (n_steps,n_cg_sites,n_dims).
         map =
-            LinearMap characterizing the optimal force map.
+            Map characterizing the optimal force map.
         residual =
             Force map residual calculated using force_smoothness. Note that this
             is not performed on a hold-out set, so be wary of overfitting.
@@ -84,7 +84,7 @@ def project_forces(
         constrained_inds=constrained_inds,
         **kwargs
     )
-    mapped_forces = force_map(forces)
+    mapped_forces = force_map(points=forces, copoints=xyz)
     if only_return_forces:
         return mapped_forces
     to_return = {}
@@ -95,15 +95,14 @@ def project_forces(
     return to_return
 
 
-def project_forces_cv(cv_arg_dict, forces, n_folds=5, *args, **kwargs):
+def project_forces_cv(cv_arg_dict, forces, xyz=None, n_folds=5, *args, **kwargs):
     """A slim wrapper function to perform cross validation over project_forces.
 
     Note: this function does not choose an optimal model. Instead, it performs
     cross validation for each parameter listed in cv_arg_dict. You should use
     this to select an optimal hyperparameter and then train a production model.
 
-    Note: xyz is not split up into folds like forces. When we have added
-    nonlinear methods we will have to rethink this.
+    Note: xyz _is_ split up into folds like forces.
 
     Arguments
     ---------
@@ -117,6 +116,9 @@ def project_forces_cv(cv_arg_dict, forces, n_folds=5, *args, **kwargs):
     forces (numpy.ndarray):
         See project_forces; it is split into CV folds before being passed to
         project_forces.
+    xyz (numpy.ndarray or None):
+        See project_forces; it is split into CV folds before being passed to
+        project_forces, unless it is None, in which case it is simply passed.
     n_folds (positive integer):
         Number of cross validation folds to use.
     *args/**kwargs:
@@ -149,12 +151,26 @@ def project_forces_cv(cv_arg_dict, forces, n_folds=5, *args, **kwargs):
         combined_kwargs = dict(kwargs, **{cv_arg_name: cv_arg})
         # iterate over folds
         for train_inds, val_inds in zip(compl_chunked_frame_inds, chunked_frame_inds):
+            # make training data
             train_forces = forces[train_inds]
-            trained_map = project_forces(forces=train_forces, *args, **combined_kwargs)[
-                "map"
-            ]
+            if xyz is None:
+                train_xyz = None
+            else:
+                train_xyz = xyz[train_inds]
+            # use training data for parameterization
+            trained_map = project_forces(
+                forces=train_forces, xyz=train_xyz, *args, **combined_kwargs
+            )["map"]
+            # make validation data
             val_forces = forces[val_inds]
-            cv_fold_scores.append(force_smoothness(trained_map(val_forces)))
+            if xyz is None:
+                val_xyz = None
+            else:
+                val_xyz = xyz[val_inds]
+            # use validation data
+            cv_fold_scores.append(
+                force_smoothness(trained_map(points=val_forces, copoints=val_xyz))
+            )
         cv_results.update({cv_arg: sum(cv_fold_scores) / len(cv_fold_scores)})
     return cv_results
 
