@@ -3,6 +3,16 @@
 A package to aggregate atomistic forces to estimate the forces of a given
 manybody potential of mean force. 
 
+### Installation
+Install the aggforce package from source by calling `pip install .`
+ from the repository's root directory.
+
+To install the quadratic programming solvers required to find optimized force mappings:
+```
+pip install "qpsolvers[starter_solvers]"
+```
+
+
 ### Example usage
 
 The following code shows how to generate an optimal linear force aggregation
