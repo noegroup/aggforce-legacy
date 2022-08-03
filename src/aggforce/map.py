@@ -3,6 +3,7 @@ coarse-grained points. Points may be positions or forces.
 """
 
 from abc import ABC, abstractmethod
+from itertools import combinations, product
 import numpy as np
 
 
@@ -21,8 +22,20 @@ class Map(ABC):
     n_dim = 3
 
     @abstractmethod
-    def __init__(self):
-        pass
+    def __init__(self, tags):
+        """
+        Arguments
+        ---------
+        tags (dict):
+            Used to create self.tags, which is a dictionary that than be
+            arbitrarily populated at initialization. Useful for optimization
+            methods to pass logs and residuals when a proper interface does not
+            exist.
+        """
+        if tags is None:
+            tags = {}
+        self.tags = tags
+        return
 
     @property
     @abstractmethod
@@ -77,7 +90,7 @@ class LinearMap(Map):
     (n_steps,n_sites,n_dims).
     """
 
-    def __init__(self, mapping, n_fg_sites=None):
+    def __init__(self, mapping, n_fg_sites=None, tags=None):
         r"""Initializes a LinearMapping object from something describing a map.
 
         Arguments
@@ -95,6 +108,8 @@ class LinearMap(Map):
             Certain mapping descriptions make it ambiguous how many total
             fine-grained sites there are. This variable allows this ambiguity to
             be resolved.
+        tags (dictionary or None):
+            Passed to Map init.
 
         Example:
             [[0,2,3],[4]] with n_fg_sites=6 describes a 6 particle fg system
@@ -109,6 +124,8 @@ class LinearMap(Map):
             the weights directly, as where in the list format it was done
             automatically.
         """
+
+        super().__init__(tags)
 
         if isinstance(mapping, np.ndarray) and len(mapping.shape) == 2:
             if n_fg_sites is not None:
@@ -151,6 +168,21 @@ class LinearMap(Map):
 
         return self._standard_matrix.shape[1]
 
+    @property
+    def participating_fg(self):
+        r"""A table of which atoms are included in the definition of each cg
+        site. Formatted as a dictionary of {cg_index:<list_of_fg_indices>}.
+        """
+
+        inc_matrix = self.standard_matrix > 0
+        ind_form = list(zip(*np.nonzero(inc_matrix)))
+        table = []
+        for cg_ind in range(self.n_cg_sites):
+            table.append([])
+        for cg_ind, fg_ind in ind_form:
+            table[cg_ind].append(fg_ind)
+        return table
+
     def __call__(self, points, copoints=None):
         r"""Applies map to a particular form of 3-dim array.
 
@@ -166,10 +198,198 @@ class LinearMap(Map):
         Combines points along the n_sites dimension according to the internal
         map.
         """
-        shape = points.shape
-        reshaped_input = np.reshape(np.swapaxes(points, 0, 1), (shape[1], -1))
-        reshaped_output = np.matmul(self.standard_matrix, reshaped_input)
-        output = np.swapaxes(
-            np.reshape(reshaped_output, (-1, shape[0], shape[2])), 0, 1
-        )
-        return output
+        return trjdot(points, self.standard_matrix)
+
+
+class CLAMap(Map):
+    r"""Provides a representation of a Co-Local Affine map with a particular
+    structure.
+
+    An affine transformation on x is Ax+b (a translation and linear
+    transformation). Consider two time series, x_i and y_i. Consider mapping x_i
+    using information from y_i to create a specific affine transformation for
+    every x_i as so:
+        Input:
+            x_1, x_2, ..., x_T
+            (with y_1, y_2, ..., y_T)
+        Output:
+            A(y_1)x_1+b(y1), A(y_2)x_2+b(y_2), ..., A(y_T)x_T+b(y_T)
+
+    This is the type of map this object describes. It is specified by providing
+    A(.) and b(.). A is referred to as scale, and b is referred to as trans.  We
+    refer to the values being mapped as points, and the values creating A and b
+    copoints (hence the name co-local affine map).
+
+    This is a particular form of nonlinear map and is the output of featurized
+    force maps. Unfortunately, it cannot be expressed using a single matrix
+    (unlike linear maps), and so does not have a standard_matrix property.
+    """
+
+    def __init__(
+        self, scale, trans, n_fg_sites, n_cg_sites=None, zeroes_check=True, tags=None
+    ):
+        r"""Initializes a CLAMap object from functions scale (A) and trans (b).
+
+        Arguments
+        ---------
+        scale (callable):
+            Callable which accepts an array of shape (n_steps,n_fg_sites,n_dim)
+            and returns (n_steps,n_fg_sites,n_cg_sites). See class description for
+            more details.
+        trans (callable):
+            Callable which accepts an array of shape (n_steps,n_fg_sites,n_dim)
+            and returns (n_steps,n_cg_sites,n_dim). See class description for
+            more details.
+        n_fg_sites (integer):
+            Number of fg sites in the input space.
+        n_cg_sites (integer or None):
+            Number of cg sites in the output space. If set to None, then
+            zero_check must be True, and it's value is inferred during the zero
+            zero check.
+        zeroes_check (boolean):
+            If true, A and b are tested by creating a zeros array for both the
+            points and copoints. The dimension of these arrays corresponds to a
+            single frame trajectory and uses the n_fg_sites argument and n_dim
+            class variable.
+        tags (dictionary or None):
+            Passed to Map init.
+        """
+
+        super().__init__(tags)
+
+        if n_cg_sites is None and not zeroes_check:
+            raise ValueError("If n_cg_sites is not set, zeroes_check must be truthy.")
+
+        if zeroes_check:
+            z_points = np.zeros((1, n_fg_sites, Map.n_dim))
+            mapped = trjdot(z_points, scale(z_points)) + trans(z_points)
+            if n_cg_sites is None:
+                n_cg_sites = mapped.shape[1]
+            else:
+                if n_cg_sites != mapped.shape[1]:
+                    raise ValueError("n_cg_sites did not match results from zero test")
+
+        self._n_cg_sites = n_cg_sites
+        self._n_fg_sites = n_fg_sites
+        self.scale = scale
+        self.trans = trans
+
+    @property
+    def n_cg_sites(self):
+        r"""The number of coarse-grained sites described by the output of the
+        map.
+        """
+
+        return self._n_cg_sites
+
+    @property
+    def n_fg_sites(self):
+        r"""The number of fine-grained sites described by the input of the
+        map.
+        """
+
+        return self._n_fg_sites
+
+    def __call__(self, points, copoints):
+        r"""Applies map to a particular form of 3-dim array.
+
+        Arguments
+        ---------
+        points (np.ndarray):
+            Assumed to be 3 dimensional of shape (n_steps,n_sites,n_dims).
+        copoints (np.ndarray):
+            Provided as input to A and b during mapping. Assume dot be of form
+            (n_steps,n_sites,n_dims). See class description.
+
+        Returns
+        -------
+        Combines points along the n_sites dimension according to the internal
+        map functions.
+        """
+
+        scale = self.scale(copoints)
+        trans = self.trans(copoints)
+        return trjdot(points, scale) + trans
+
+
+def trjdot(points, factor):
+    """Performs a specific matrix product when dealing with mdtraj-style arrays
+    and a matrix.
+
+    Functionality is most easily described via an example:
+        Molecular positions (and forces) are often represented as arrays of
+        shape (n_steps,n_sites,n_dims). Other places in the code we often
+        transform these arrays to a reduced (coarse-grained) resolution where
+        the output is (n_steps,n_cg_sites,n_dims).
+
+        (When linear) the relationship between the old (n_sites) and new
+        (n_cg_sites) resolution can be described as a matrix of size
+        (n_sites,n_cg_sites). This relationship is between sites, and is
+        broadcast across the other dimensions. Here, the sites are contained in
+        points, and the mapping relationship is in factor.
+
+        However, we cannot directly use dot products to apply such a matrix map.
+        This function applies this factor matrix as expected, in spirit of
+        (points * factor).
+
+        Additionally, if instead the matrix mapping changes at each frame of the
+        trajectory, this can be specified by providing a factor of shape
+        (n_steps,n_cg_sites,n_sites). This situation is determined by
+        considering the dimension of factor.
+
+    Arguments
+    ---------
+    points (numpy.ndarray)
+        3-dim ndarray of shape (n_steps,n_sites,n_dims). To be mapped using
+        factor.
+    factor (numpy.ndarray)
+        2-dim ndarray of shape (n_cg_sites,n_sites) or 3-dim ndarray of shape
+        (n_steps,n_cg_sites,n_sites). Used to map points.
+
+    Returns
+    -------
+    ndarray of shape (n_steps,n_cg_sites,n_dims) contained points mapped
+    with factor.
+    """
+
+    # optimal path found from external optimization with einsum_path
+    opt_path = ["einsum_path", (0, 1)]
+    if len(factor.shape) == 2:
+        return np.einsum("tfd,cf->tcd", points, factor, optimize=opt_path)
+    if len(factor.shape) == 3:
+        return np.einsum("...fd,...cf->...cd", points, factor, optimize=opt_path)
+    raise ValueError("Factor matrix is an incompatible shape.")
+
+
+def smear_map(site_groups, n_sites):
+    """Makes a LinearMap which replaces the positions of groups of atoms with
+    their mean. This map does _not_ reduce the dimensionality of a system;
+    instead, every modified position is replaced with the corresponding mean.
+
+    Arguments
+    ---------
+    site_groups (list of iterables of integers):
+        List of iterables, each member of which describes a group of sites
+        which must be "smeared" together.
+    n_sites (integer):
+        Total number of sites in the system
+
+    Returns
+    -------
+    LinearMap instance
+    """
+
+    site_sets = [set(x) for x in site_groups]
+
+    for pair in combinations(site_sets, 2):
+        if pair[0].intersection(pair[1]):
+            raise ValueError(
+                "Site definitions in site_groups overlap; merge before passing."
+            )
+
+    matrix = np.zeros((n_sites, n_sites))
+    np.fill_diagonal(matrix, 1)
+    for group in site_sets:
+        inds0, inds1 = zip(*product(group, group))
+        matrix[inds0, inds1] = 1 / len(group)
+    return LinearMap(mapping=matrix)
