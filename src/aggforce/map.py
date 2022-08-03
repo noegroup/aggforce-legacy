@@ -361,7 +361,7 @@ def trjdot(points, factor):
     raise ValueError("Factor matrix is an incompatible shape.")
 
 
-def smear_map(site_groups, n_sites):
+def smear_map(site_groups, n_sites, return_mapping_matrix=False):
     """Makes a LinearMap which replaces the positions of groups of atoms with
     their mean. This map does _not_ reduce the dimensionality of a system;
     instead, every modified position is replaced with the corresponding mean.
@@ -373,10 +373,12 @@ def smear_map(site_groups, n_sites):
         which must be "smeared" together.
     n_sites (integer):
         Total number of sites in the system
+    return_mapping_matrix (boolean):
+        If true, instead of a LinearMap, the mapping matrix itself is returned.
 
     Returns
     -------
-    LinearMap instance
+    LinearMap instance or 2-dimensional numpy.ndarray
     """
 
     site_sets = [set(x) for x in site_groups]
@@ -387,9 +389,11 @@ def smear_map(site_groups, n_sites):
                 "Site definitions in site_groups overlap; merge before passing."
             )
 
-    matrix = np.zeros((n_sites, n_sites))
+    matrix = np.zeros((n_sites, n_sites), dtype=np.float32)
     np.fill_diagonal(matrix, 1)
     for group in site_sets:
         inds0, inds1 = zip(*product(group, group))
         matrix[inds0, inds1] = 1 / len(group)
+    if return_mapping_matrix:
+        return matrix
     return LinearMap(mapping=matrix)

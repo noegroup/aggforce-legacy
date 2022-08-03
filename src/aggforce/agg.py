@@ -81,7 +81,7 @@ def project_forces(
         xyz=xyz,
         config_mapping=config_mapping,
         forces=forces,
-        constrained_inds=constrained_inds,
+        constraints=constrained_inds,
         **kwargs
     )
     mapped_forces = force_map(points=forces, copoints=xyz)
