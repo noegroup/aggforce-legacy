@@ -532,18 +532,18 @@ def gb_subfeat(
     return collapsed
 
 
-@partial(
-   jax.jit,
-   static_argnames=["inner", "outer", "channels", "max_channels", "method", "n_basis"],
-)
+#@partial(
+#   jax.jit,
+#   static_argnames=["inner", "outer", "channels", "max_channels", "method", "n_basis"],
+#)
 def gb_subfeat_jac(
-    points, cg_points, channels, max_channels, smear_mat=None, method="vmap", **kwargs
+    points, cg_points, channels, max_channels, smear_mat=None, method="reorder", **kwargs
 ):
     """Calculates per frame (collapsed) divergences for gb_subfeat.
 
     Most arguments are passed to gb_subfeat; see that function for more details.
     However, note that not all the arguments are the same (see, for example, the
-    allowed shaped of points, vmap, and where kwargs goes).
+    allowed shaped of points and where kwargs goes).
 
     NOTE: Be sure to pass the same arguments to this and gb_subfeat if using
     their results in tandem (even if this function;s internal call to gb_subfeat
@@ -574,19 +574,12 @@ def gb_subfeat_jac(
         distances. Useful for accounting for molecular constraints. Should be
         shape (n_fg_sites,n_fg_sites).
     method (string):
-        if method=="vmap":
-             vmap is used to vectorize a per-frame Jacobian calculation. This
-             seems to slightly lower memory usage.
-        elif method=="basic":
-             A direct Jacobian is calculated using a full gb_subfeat call with
-             collapse=True.
+        if method=="basic":
+            A direct Jacobian is calculated using a full gb_subfeat call with
+            collapse=True.
         elif method=="reorder":
-            eacobian is calculated before one-hot-like vectors are created, and
+            Jacobian is calculated before one-hot-like vectors are created, and
             then itself one-hotted.
-    vmap (boolean):
-        If truthy, then vmap is used to vectorize a per-frame Jacobian
-        calculation. This seems to lower memory usage. If false, a direct
-        Jacobian is calculated using a full gb_subfeat call with collapse=True.
     kwargs:
         Passed to gb_subfeat.
 
@@ -596,32 +589,7 @@ def gb_subfeat_jac(
     frame Jacobian values summed over the fine grained particles.
     """
 
-    if method == "vmap":
-        # to_jac is a featurization of a single frame, summed over atom dim.
-        # The sum occurs since each atom contributes a single term to this sum,
-        # so the partials of summed jacobian avoid trivially zero cross terms.
-        # (similar to summing energies over a trajectory and differentiating with
-        # respect to each frames' positions for forces
-
-        # note the terminal .sum on the lambda
-        to_jac = lambda x: gb_subfeat(
-            x,
-            cg_points=cg_points,
-            channels=channels,
-            max_channels=max_channels,
-            smear_mat=smear_mat,
-            collapse=False,
-            **kwargs,
-        ).sum(axis=0)
-        # get per frame jacobian. jacrev seems to use more memory
-        per_frame_jac_f = jax.jacfwd(to_jac)
-        # make per frame jac a traj jac
-        vmap_to_jac = jax.vmap(per_frame_jac_f, in_axes=0, out_axes=0)
-        jac = vmap_to_jac(points)
-        # sum over fine-grained sites
-        traced_jac = jac.sum(axis=(2,))
-        return traced_jac
-    elif method == "basic":
+    if method == "basic":
         # collapse=True-> sums features over all atoms and frames to that
         # jacobian calculation avoids trivial zero entries.
         to_jac = lambda x: gb_subfeat(
