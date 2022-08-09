@@ -20,6 +20,7 @@ def gb_feat(
     width=1.0,
     batch_size=None,
     lazy=True,
+    div_method="reorder",
 ):
     """Featurizes each fine-grained site by considering the distance to the
     coarse-grained site at each frame.
@@ -64,6 +65,9 @@ def gb_feat(
     lazy (boolean):
         If truthy, generators of features and divs are returned; else, lists are
         returned.
+    div_method (string):
+        Determines how the divergence will be calculated; passed to
+        gb_subfeat_jac as method.
 
     Returns
     -------
@@ -122,13 +126,16 @@ def gb_feat(
         feats = [feater(x) for x in range(cmap.n_cg_sites)]
 
     # prep for divergences generator
+
+    # this function takes a set of indices for subsetting, this makes it
+    # compatible with abatch
     def subdivver(arg_inds, arg_cg_site):
         sub_points = points[arg_inds]
         sub_cg_points = cg_points[arg_inds]
         div = gb_subfeat_jac(
             points=sub_points,
             cg_points=sub_cg_points[:, arg_cg_site : (arg_cg_site + 1), :],
-            method="reorder",
+            method=div_method,
             **f_kwargs,
         )
         return div
@@ -339,8 +346,10 @@ def clipped_gauss(inp, center, width=1.0, clip=1e-3):
     return jnp.clip(a=gauss, a_min=clip) - clip
 
 
-@partial(jax.jit, inline=True, static_argnames=["channels", "max_channels"])
-def channel_allocate(feats, channels, max_channels):
+@partial(
+    jax.jit, inline=True, static_argnames=["channels", "max_channels", "jac_shape"]
+)
+def channel_allocate(feats, channels, max_channels, jac_shape=False):
     """Transforms features given for each atom to one hot versions that
     independently apply to groups of atoms.
 
@@ -364,7 +373,8 @@ def channel_allocate(feats, channels, max_channels):
     ---------
     feats (jnp.DeviceArray):
         Array containing the features for each fine-grained site at each frame.  Assumed
-        to be of shape (n_frames, n_fg_sites, n_feats).
+        to be of shape (n_frames, n_fg_sites, n_feats) or 
+        (n_feats, n_frames, n_fg_sites, n_dim) (see jac_shape).
     channels (tuple of positive integers):
         Tuple of integers with the length being the number of fine-grained sites
         in the trajectory. Each integer assigns a fine-grained site to a
@@ -376,25 +386,53 @@ def channel_allocate(feats, channels, max_channels):
         Larger values increase memory usage, so the most memory efficient
         (max_channels,channels) pair has channels starting at 0 with maximum value
         at max_channels, with no unused index in between.
+    jac_shape (boolean):
+        If True, feats is assumed to be of shaped (n_feats, n_frames,
+        n_fg_sites, n_dim).  Else, feats is assumed to be of shape
+        (n_frames, n_fg_sites, n_feats)
+
 
     Returns
     -------
-    jnp.DeviceArray of shape (n_frames,n_fg_sites,n_feats*max_channels)
+    jnp.DeviceArray of similar shape as input, but with feats dimension scaled
+    to be max_channels*max_feats.
     """
 
-    n_feats = feats.shape[2]
-    n_frames = feats.shape[0]
-    per_site_arrays = []
+    if jac_shape:
+        # jac is (n_feat, n_frame, n_fg_sites, n_dim)
+        n_feats = feats.shape[0]
+        n_frames = feats.shape[1]
+        n_dim = feats.shape[3]
 
-    # zero array that each slice in loop is based on
-    per_atom_features_base = jnp.zeros((n_frames, n_feats * max_channels))
-    for site, channel in enumerate(channels):
-        # location of particular slice
-        target = slice(n_feats * channel, n_feats * (channel + 1))
-        # JAX modifications are not in-place
-        per_atom_feats = per_atom_features_base.at[:, target].set(feats[:, site, :])
-        per_site_arrays.append(per_atom_feats)
-    return jnp.stack(per_site_arrays, 1)
+        per_site_arrays = []
+
+        # zero array that each slice in loop is based on
+        per_atom_features_base = jnp.zeros((n_feats * max_channels, n_frames, n_dim))
+        for site, channel in enumerate(channels):
+            # location of particular slice
+            target = slice(n_feats * channel, n_feats * (channel + 1))
+            # JAX modifications are not in-place
+            per_atom_feats = per_atom_features_base.at[target, :, :].set(
+                feats[:, :, site, :]
+            )
+            per_site_arrays.append(per_atom_feats)
+
+        return jnp.stack(per_site_arrays, 2)
+    else:
+        n_feats = feats.shape[2]
+        n_frames = feats.shape[0]
+
+        per_site_arrays = []
+
+        # zero array that each slice in loop is based on
+        per_atom_features_base = jnp.zeros((n_frames, n_feats * max_channels))
+        for site, channel in enumerate(channels):
+            # location of particular slice
+            target = slice(n_feats * channel, n_feats * (channel + 1))
+            # JAX modifications are not in-place
+            per_atom_feats = per_atom_features_base.at[:, target].set(feats[:, site, :])
+            per_site_arrays.append(per_atom_feats)
+        return jnp.stack(per_site_arrays, 1)
 
 
 @partial(
@@ -405,11 +443,19 @@ def channel_allocate(feats, channels, max_channels):
         "channels",
         "max_channels",
         "collapse",
+        "channelize",
         "n_basis",
     ],
 )
 def gb_subfeat(
-    points, cg_points, channels, max_channels, smear_mat=None, collapse=False, **kwargs
+    points,
+    cg_points,
+    channels,
+    max_channels,
+    smear_mat=None,
+    collapse=False,
+    channelize=True,
+    **kwargs,
 ):
     """Creates features (without divergences) using Gaussian bins and distances.
 
@@ -446,6 +492,9 @@ def gb_subfeat(
         Trace over indices corresponding to frames and fine-grained sites in the
         output. Useful for some later gradient calculations.  If collapse=True
         and points is 2-dimensional, the output may not make sense.
+    channelize (boolean):
+        Whether to distribute the Gaussian features over one-hot-like channels
+        to make them specific to various groups of atoms.
     kwargs:
         Passed to gaussian_dist_basis.
 
@@ -469,7 +518,10 @@ def gb_subfeat(
         points = trjdot(points, smear_mat)
     dists = distances(xyz=points, cross_xyz=cg_points)
     gauss = gaussian_dist_basis(dists, **kwargs)[:, 0, :, :]
-    channelized = channel_allocate(gauss, channels, max_channels)
+    if channelize:
+        channelized = channel_allocate(gauss, channels, max_channels)
+    else:
+        channelized = gauss
     if collapse:
         collapsed = channelized.sum(axis=(0, 1))
     else:
@@ -481,11 +533,11 @@ def gb_subfeat(
 
 
 @partial(
-    jax.jit,
-    static_argnames=["inner", "outer", "channels", "max_channels", "vmap", "n_basis"],
+   jax.jit,
+   static_argnames=["inner", "outer", "channels", "max_channels", "method", "n_basis"],
 )
 def gb_subfeat_jac(
-    points, cg_points, channels, max_channels, smear_mat=None, vmap=True, **kwargs
+    points, cg_points, channels, max_channels, smear_mat=None, method="vmap", **kwargs
 ):
     """Calculates per frame (collapsed) divergences for gb_subfeat.
 
@@ -521,6 +573,16 @@ def gb_subfeat_jac(
         Mapping matrix multiple with points via trjdot prior to calculating
         distances. Useful for accounting for molecular constraints. Should be
         shape (n_fg_sites,n_fg_sites).
+    method (string):
+        if method=="vmap":
+             vmap is used to vectorize a per-frame Jacobian calculation. This
+             seems to slightly lower memory usage.
+        elif method=="basic":
+             A direct Jacobian is calculated using a full gb_subfeat call with
+             collapse=True.
+        elif method=="reorder":
+            eacobian is calculated before one-hot-like vectors are created, and
+            then itself one-hotted.
     vmap (boolean):
         If truthy, then vmap is used to vectorize a per-frame Jacobian
         calculation. This seems to lower memory usage. If false, a direct
@@ -534,7 +596,7 @@ def gb_subfeat_jac(
     frame Jacobian values summed over the fine grained particles.
     """
 
-    if vmap:
+    if method == "vmap":
         # to_jac is a featurization of a single frame, summed over atom dim.
         # The sum occurs since each atom contributes a single term to this sum,
         # so the partials of summed jacobian avoid trivially zero cross terms.
@@ -559,7 +621,7 @@ def gb_subfeat_jac(
         # sum over fine-grained sites
         traced_jac = jac.sum(axis=(2,))
         return traced_jac
-    else:
+    elif method == "basic":
         # collapse=True-> sums features over all atoms and frames to that
         # jacobian calculation avoids trivial zero entries.
         to_jac = lambda x: gb_subfeat(
@@ -576,6 +638,27 @@ def gb_subfeat_jac(
         traced_jac = jac.sum(axis=(2,))
         reshaped_jac = jnp.swapaxes(traced_jac, 0, 1)
         return reshaped_jac
+    elif method == "reorder":
+        to_jac = lambda x: gb_subfeat(
+            x,
+            cg_points=cg_points,
+            channels=channels,
+            max_channels=max_channels,
+            smear_mat=smear_mat,
+            collapse=True,
+            channelize=False,
+            **kwargs,
+        )
+        # jac is (n_feat, n_frame, n_fg_sites, n_dim)
+        jac = jax.jacrev(to_jac)(points)
+        # ch_jac is (exp_n_feat, n_frame, n_fg_sites, n_dim)
+        ch_jac = channel_allocate(jac, channels, max_channels, jac_shape=True)
+        # sum over fine-grained sites
+        traced_ch_jac = ch_jac.sum(axis=(2,))
+        reshaped_jac = jnp.swapaxes(traced_ch_jac, 0, 1)
+        return reshaped_jac
+    else:
+        raise ValueError("Unknown method for jacobian calculation.")
 
 
 @jax.jit
