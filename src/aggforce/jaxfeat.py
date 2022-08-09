@@ -98,7 +98,6 @@ def gb_feat(
 
     # shared option dict for JAX calls
     f_kwargs = dict(
-        points=points,
         channels=ids,
         max_channels=max_channels,
         smear_mat=smearm,
@@ -109,9 +108,10 @@ def gb_feat(
     )
 
     # prep for feature generator
-    def feater(cg_site):
+    def feater(arg_cg_site):
         feat = gb_subfeat(
-            cg_points=cg_points[:, cg_site : (cg_site + 1), :],
+            points=points,
+            cg_points=cg_points[:, arg_cg_site : (arg_cg_site + 1), :],
             **f_kwargs,
         )
         return np.asarray(feat)
@@ -122,17 +122,24 @@ def gb_feat(
         feats = [feater(x) for x in range(cmap.n_cg_sites)]
 
     # prep for divergences generator
-    def subdivver(points, cg_site):
+    def subdivver(arg_inds, arg_cg_site):
+        sub_points = points[arg_inds]
+        sub_cg_points = cg_points[arg_inds]
         div = gb_subfeat_jac(
-            cg_points=cg_points[:, cg_site : (cg_site + 1), :],
-            vmap=True,
+            points=sub_points,
+            cg_points=sub_cg_points[:, arg_cg_site : (arg_cg_site + 1), :],
+            method="reorder",
             **f_kwargs,
         )
         return div
 
+    inds = np.arange(len(points))
+
     # make function which batches the JAX calls to keep memory usage down
     def divver(cg_site):
-        div = abatch(func=subdivver, arr=points, cg_site=cg_site, chunk_size=batch_size)
+        div = abatch(
+            func=subdivver, arr=inds, arg_cg_site=cg_site, chunk_size=batch_size
+        )
         return np.asarray(div)
 
     if lazy:
@@ -178,7 +185,7 @@ def abatch(func, arr, chunk_size, *args, **kwargs):
         return func(arr, *args, **kwargs)
     n_chunks = jnp.ceil(len(arr) / chunk_size).astype(jnp.int32)
     arrs = jnp.array_split(arr, n_chunks)
-    return jnp.vstack([func(arr, *args, **kwargs) for arr in arrs])
+    return jnp.vstack([func(subarr, *args, **kwargs) for subarr in arrs])
 
 
 @partial(
