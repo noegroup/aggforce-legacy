@@ -5,10 +5,6 @@ Running these simulations requires the following libraries to be installed:
 - openmm
 - bgmol
 - tqdm
-
-Examples
---------
-
 """
 
 import os
