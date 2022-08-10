@@ -16,7 +16,7 @@ def kjmol2kt(x):
 
 
 class DimerData(pl.LightningDataModule):
-    def __init__(self, rigid=True, random_seed=1, train_fraction=0.8, test_fraction=0.2, batch_size=128, test_batch_size=512, **kwargs):
+    def __init__(self, rigid=True, random_seed=1, train_fraction=0.8, test_fraction=0.2, batch_size=64, test_batch_size=512, **kwargs):
         super().__init__()
         self.rigid = rigid
         self.random_seed = random_seed
@@ -32,7 +32,7 @@ class DimerData(pl.LightningDataModule):
         parser = parent_parser.add_argument_group("DimerData")
         parser.add_argument("--rigid", action=argparse.BooleanOptionalAction)
         parser.add_argument("--random-seed", type=int, default=1)
-        parser.add_argument("--batch-size", type=int, default=128)
+        parser.add_argument("--batch-size", type=int, default=64)
         parser.add_argument("--test-batch-size", type=int, default=512)
         parser.add_argument("--train-fraction", type=float, default=0.8)
         parser.add_argument("--test-fraction", type=float, default=0.2)
@@ -45,6 +45,7 @@ class DimerData(pl.LightningDataModule):
             val_fraction=1.-self.train_fraction-self.test_fraction,
             test_fraction=self.test_fraction
         )
+        print("#Train data", len(self.train_set))
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(self.train_set, batch_size=self.train_batch_size)
