@@ -9,6 +9,7 @@ from bgmol.datasets import WaterDimerRigidTIP3P, WaterDimerFlexibleTIP3P
 
 
 KT = 2.494338785445972
+DOWNLOAD_DATA = False
 
 
 def kjmol2kt(x):
@@ -39,7 +40,7 @@ class DimerData(pl.LightningDataModule):
         return parent_parser
 
     def prepare_data(self) -> None:
-        dataset = WaterDimerRigidTIP3P() if self.rigid else WaterDimerFlexibleTIP3P()
+        dataset = WaterDimerRigidTIP3P(download=DOWNLOAD_DATA) if self.rigid else WaterDimerFlexibleTIP3P(download=DOWNLOAD_DATA)
         self.train_set, _, self.test_set = dataset.torch_datasets(
             fields=["xyz", "forces"],
             val_fraction=1.-self.train_fraction-self.test_fraction,

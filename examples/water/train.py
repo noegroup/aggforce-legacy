@@ -1,5 +1,17 @@
+#! /usr/bin/env python
+
+#SBATCH --partition=micro,small,big,gpu
+#SBATCH --nodes=1 
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=1GB 
+#SBATCH --time=00:59:00
+
+
 """Train a CG model for the water dimer.
 """
+import os
+import sys
+sys.path.append(os.getcwd())
 
 from argparse import ArgumentParser
 from model import DimerEnergy, DimerData
