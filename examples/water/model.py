@@ -57,16 +57,19 @@ class DimerData(pl.LightningDataModule):
 
 class CGEnergy(bg.Energy):
     """An RBF net on the distance between two CG beads"""
-    def __init__(self, n_rbf):
+    def __init__(self, n_rbf, trainable_rbf=False):
         super().__init__(dim=(2, 3))
         self.weights = torch.nn.Parameter(torch.randn(n_rbf))
-        self.register_buffer("centers", torch.linspace(0.0, 1.0, n_rbf))
-        sigma = 1 / n_rbf
-        self.rbf = lambda x: torch.exp(-x ** 2 / (2 * sigma ** 2))
+        if trainable_rbf:
+            self.sigma = torch.nn.Parameter(torch.ones(n_rbf) * 1 / n_rbf)
+            self.centers = torch.nn.Parameter(torch.linspace(0.0, 1.0, n_rbf))
+        else:
+            self.sigma = 1 / n_rbf
+            self.register_buffer("centers", torch.linspace(0.0, 1.0, n_rbf))
+        self.rbf = lambda x: torch.exp(-x ** 2 / (2 * self.sigma ** 2))
         # self.repulsion_params = torch.nn.Parameter(torch.randn(2))
         # self.attraction_params = torch.nn.Parameter(torch.randn(2))
         # self.softplus = torch.nn.Softplus()
-
 
     def _energy(self, r):
         distances = torch.linalg.norm(r[:, 0, :] - r[:, 1, :], dim=-1)
@@ -101,10 +104,10 @@ class DimerEnergy(pl.LightningModule):
         "agg": ForceAggregationMap
     }
 
-    def __init__(self, n_rbf=40, lr=1e-2, force_map="slice", **kwargs):
+    def __init__(self, n_rbf=40, lr=1e-2, force_map="slice", trainable_rbf=False, **kwargs):
         super().__init__()
         self.save_hyperparameters()
-        self.cgmodel = CGEnergy(n_rbf)
+        self.cgmodel = CGEnergy(n_rbf, trainable_rbf=trainable_rbf)
         self.lr = lr
         self.position_map = PositionSliceMap()
         self.force_map = DimerEnergy.FORCE_MAPS[force_map]()
@@ -115,6 +118,7 @@ class DimerEnergy(pl.LightningModule):
         parser.add_argument("--n-rbf", type=int, default=40)
         parser.add_argument("--lr", type=float, default=1e-2)
         parser.add_argument("--force-map", type=str, default="slice")
+        parser.add_argument("--trainable-rbf", action=argparse.BooleanOptionalAction, default=False) 
         return parent_parser
 
     def force_residual(self, positions, forces):

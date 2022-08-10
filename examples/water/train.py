@@ -1,11 +1,15 @@
 #! /usr/bin/env python
 
-#SBATCH --partition=micro,small,big,gpu
-#SBATCH --nodes=1 
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=1GB 
-#SBATCH --time=00:59:00
+###SBATCH --partition=micro,small,big,gpu
+###SBATCH --nodes=1 
+###SBATCH --cpus-per-task=8
+###SBATCH --mem=1GB 
+###SBATCH --time=00:59:00
 
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --time=10:00:00
+#SBATCH --mem=1GB
 
 """Train a CG model for the water dimer.
 """
@@ -22,16 +26,18 @@ import numpy as np
 from bgflow.utils import as_numpy
 
 
+#checkpoint_callback = ModelCheckpoint(
+#            dirpath=TRAIN_PATH,
+#                monitor="validation_loss",
+#                    save_top_k=-1,  # -1 to save all
+#                        every_n_epochs=1,
+#                            filename="{epoch}-{validation_loss:.4f}",
+#                                save_last=True,
+#                                )
+
+
 def dirname(rigid, force_map, train_fraction):
-    return f"logs/rigid:{rigid}_{force_map}_trainfraction{train_fraction:.4f}"
-
-
-#def evaluate(net, filename):
-#   x = torch.linspace(0.1, 0.7, 100).to(net.weights)
-#   rs = torch.zeros(100, 2, 3).to(net.weights)
-#   rs[:, 1, 0] = x
-#   e = net.energy(rs)
-
+    return f"logs_rbf200/rigid:{rigid}_{force_map}_trainfraction{train_fraction:.4f}"
 
 
 def train():
@@ -47,9 +53,9 @@ def train():
 
     energy = DimerEnergy(**vars(args))
 
-    logger = TensorBoardLogger(dirname(data.rigid, energy.force_map.__class__.__name__, data.train_fraction))
-    #checkpoint_callback = ModelCheckpoint(every_n_epochs=25)
-    trainer = pl.Trainer.from_argparse_args(args, logger=logger)#, callbacks=[checkpoint_callback])
+    logger = TensorBoardLogger(dirname(data.rigid, energy.force_map.__class__.__name__, data.train_fraction), name="")
+    checkpoint_callback = ModelCheckpoint(monitor="val_loss", save_last=False)
+    trainer = pl.Trainer.from_argparse_args(args, logger=logger, callbacks=[checkpoint_callback])
     trainer.fit(energy, data)
 
     # sample

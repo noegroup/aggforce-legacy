@@ -6,6 +6,7 @@ DRY_RUN = False #True
 
 SEEDS = range(1, 11)
 PERCENTAGES = [0.1, 0.5, 1, 5, 10, 50, 100]
+#PERCENTAGES = [50, 100]
 
 for train_percentage in PERCENTAGES:
     for seed in SEEDS:
@@ -16,7 +17,8 @@ for train_percentage in PERCENTAGES:
                 command = (
                     f"train.py --train-fraction {train_fraction:.4f} "
                     f"--force-map {force_map} --random-seed {seed} "
-                    f"--log_every_n_steps 1"
+                    f"--log_every_n_steps 1 "
+                    f"--n-rbf 200 --max_epochs 100"
                 )
                 if rigid:
                     command += " --rigid"
