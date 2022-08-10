@@ -7,6 +7,9 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 
+def dirname(rigid, force_map, train_fraction):
+    return f"logs/rigid:{rigid}_{force_map}_trainfraction{train_fraction:.2f}"
+
 
 def train():
     parser = ArgumentParser()
@@ -21,7 +24,7 @@ def train():
 
     energy = DimerEnergy(**vars(args))
 
-    logger = TensorBoardLogger(f"logs/rigid:{data.rigid}_{energy.force_map.__class__.__name__}")
+    logger = TensorBoardLogger(dirname(data.rigid, energy.force_map.__class__.__name__, data.train_fraction))
     checkpoint_callback = ModelCheckpoint(every_n_epochs=25)
     trainer = pl.Trainer.from_argparse_args(args, logger=logger, callbacks=[checkpoint_callback])
     trainer.fit(energy, data)
