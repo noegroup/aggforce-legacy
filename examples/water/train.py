@@ -37,7 +37,7 @@ from bgflow.utils import as_numpy
 
 
 def dirname(rigid, force_map, train_fraction):
-    return f"logs_rbf200/rigid:{rigid}_{force_map}_trainfraction{train_fraction:.4f}"
+    return f"logs_rbf200_random/rigid:{rigid}_{force_map}_trainfraction{train_fraction:.4f}"
 
 
 def train():

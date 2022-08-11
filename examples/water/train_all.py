@@ -18,7 +18,7 @@ for train_percentage in PERCENTAGES:
                     f"train.py --train-fraction {train_fraction:.4f} "
                     f"--force-map {force_map} --random-seed {seed} "
                     f"--log_every_n_steps 1 "
-                    f"--n-rbf 200 --max_epochs 100"
+                    f"--n-rbf 200 --max_epochs 1000"
                 )
                 if rigid:
                     command += " --rigid"
