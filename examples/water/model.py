@@ -60,7 +60,7 @@ class CGEnergy(bg.Energy):
     """An RBF net on the distance between two CG beads"""
     def __init__(self, n_rbf, trainable_rbf=False):
         super().__init__(dim=(2, 3))
-        self.weights = torch.nn.Parameter(10*torch.randn(n_rbf))
+        self.weights = torch.nn.Parameter(torch.randn(n_rbf))
         if trainable_rbf:
             self.sigma = torch.nn.Parameter(torch.ones(n_rbf) * 1 / n_rbf)
             self.centers = torch.nn.Parameter(torch.linspace(0.0, 1.0, n_rbf))
