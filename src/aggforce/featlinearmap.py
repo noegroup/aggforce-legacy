@@ -10,6 +10,7 @@ from qpsolvers import solve_qp
 from .map import CLAMap, smear_map
 from .linearmap import reduce_constraint_sets
 from .constfinder import distances
+from queue import SimpleQueue, Empty
 
 
 def qp_feat_linear_map(
@@ -315,7 +316,12 @@ def id_feat(points, cmap, constraints, return_ids=False):
             These are filled with zeros as the features do not change as a
             function of position.
         'names': None
+
+    NOTE: While the features are not generated lazily (they are not returned via
+    generators), the entries for each cg_site are views to the same numpy array,
+    so the memory footprint is only that of a single cg_site.
     """
+
     # get list of groups of fine-grained sites which have to share id features
     # because of constraints
     groups = deepcopy(constraints)
@@ -328,7 +334,6 @@ def id_feat(points, cmap, constraints, return_ids=False):
             indices = list(fg_set)
             ids[indices] = label
         return ids
-
     else:
         for label, fg_set in enumerate(reduced_groups):
             _ = [places.append([fg_ind, label]) for fg_ind in fg_set]
@@ -352,16 +357,15 @@ def id_feat(points, cmap, constraints, return_ids=False):
     )
 
 
-def multifeaturize(featurizers, **kwargs):
+def multifeaturize(featurizers):
     """Combines multiple featurization functions into a single featurization function.
 
-    NOTE: This will evaluate all features for all sites, and may have problem with lazy
-    featurizers.
+    NOTE: Output names are not supported and are set to None.
 
     Arguments
     ---------
     featurizers (list of callables):
-        A list, each member of which must use the following as input:
+        A list, each member of which must use the following as callable input:
             copoints (numpy.ndarray):
                 3-D of shape (n_frames,n_fg_sites,n_dims=3) containing the
                 points used for featurization
@@ -373,8 +377,6 @@ def multifeaturize(featurizers, **kwargs):
             'feats': list of feature mats (n_frames, n_fg_sites, n_feats)
             'divs': list of divergence mats (n_frames, n_feats, n_dim)
             'names': None or list of name strings (n_feat)
-    kwargs:
-        Passed to all callables in featurizers via **
 
     Returns
     -------
@@ -382,44 +384,236 @@ def multifeaturize(featurizers, **kwargs):
     dictionary with the following key value pairs:
        'feats': list of feature mats (n_frames, n_fg_sites, total_n_feats)
        'divs': list of divergence mats (n_frames, total_n_feats, n_dim)
-       'names': List of name strings (total_n_feat)
+       'names': None
     This output is created by combining the pertinent arrays along the n_feat
     dimensions.  Input is the same as it was for each individual featurization
     function.
-
-    NOTE: In order to create the aggregated feature names, default feature names are
-    created if names are not provided by a featurization function (set to None).
     """
 
-    def composite(*args, **sec_kwargs):
-        # eval all featurizers
-        output = [feat(*args, **sec_kwargs, **kwargs) for feat in featurizers]
-        # we need to look at feat and div series individually
-        feats = [o["feats"] for o in output]
-        divs = (o["divs"] for o in output)
-        processed_labels = []
-        # if a featurizer didn't return labels, we make substitute ones
-        for findex, output in enumerate(output):
-            label_group = output["names"]
-            if label_group is None:
-                nfeat = feats[findex][0].shape[2]
-                processed_labels.append(
-                    [f"f-{findex}-" + str(ind) for ind in range(nfeat)]
-                )
-            else:
-                processed_labels.append(label_group)
-        # this iterates over the values per _feature_. Each still is a list of
-        # values per cg site.
-        reshaped_feats = [np.concatenate(list(x), axis=2) for x in zip(*feats)]
-        reshaped_divs = [np.concatenate(list(x), axis=1) for x in zip(*divs)]
-        reshaped_labels = flatten(processed_labels)
-        return dict(
-            feats=reshaped_feats,
-            divs=reshaped_divs,
-            names=reshaped_labels,
-        )
+    def composite(*args, **kwargs):
+        output = [feat(*args, **kwargs) for feat in featurizers]
+        return FeatZipper(content=output)
 
     return composite
+
+
+class FeatZipper:
+    r"""Lazily combines the output of multiple featurizers.
+
+    NOTE: This function does not combine _featurizers_; it combines their
+    output. To combine featurizers see multifeaturize.
+
+    Featurizers output a dict with keys for features ("feats"), divergences
+    ("divs"), and names ("names"). This class combines the _output_ of multiple
+    featurizers, providing dictionary-like interface for accessing features and
+    divergences aggregated across all the results. This class can be used with
+    lazy featurizers (those providing generators) and is itself lazy: "feats" and
+    "divs" index generators.
+
+    In other words, instances of this class are objects which can be indexed
+    using the same keys as featurizer output. Indexing returns generators that
+    iterate over the data aggregated from the featurized content provided at
+    initialization.
+
+    The information for the produced feature and divergence generators comes
+    from shared data present in each instance. The original data are iterated
+    over as needed (in the case of lazy features, this implies that memory and
+    computation is performed only when needed by the aggregate output) and
+    served through the provided generators.
+
+    Note that when new data is generated (when the generators are iterated),
+    features and divergences are both generated and cached, even if only one of
+    the two is used at that particular moment.
+    """
+
+    # these keys provide understanding into the feature dictionary format
+    feat_key = "feats"
+    div_key = "divs"
+    generator_keys = set([feat_key, div_key])
+    name_key = "names"
+
+    # joiners has the particular functions for combining arrays from each
+    # content member's iteration. They are indexed by the appropriate key.
+    # e.g., "feats"'s callable combines iterations from "feats" entries.
+
+    # members cannot be static methods and in this dictionary, so they are
+    # lambdas.
+    joiners = {
+        feat_key: lambda args: np.concatenate(args, axis=2),
+        div_key: lambda args: np.concatenate(args, axis=1),
+    }
+
+    def __init__(self, content):
+        r"""Initialize a FeatZipper from list of content dictionaries.
+
+        Arguments
+        ---------
+        content (list of dictionaries):
+            List of the dictionaries that  we want to aggregate and iterate
+            over. Each dictionary should be the output of a featurizer; that is,
+            it should have "feats", "divs", and "names" as keys.  "feats" and
+            "divs" should index an iterable of numpy arrays and "names" should
+            be a list of strings.
+        """
+
+        self.reset(content)
+        # no current support for names
+        self.names = None
+
+    def dictzip(self, dictionary):
+        r"""Takes a dictionary of iterables and returns an generator that serves
+        a dictionary with a single iteration's contents, similar to zip.
+
+        Arguments
+        ---------
+        dictionary (dict):
+            dictionary with entries for each key in self.generator_keys. Each
+            key must index an iterable. Other keys are ignored.
+
+        Yields
+        ------
+        A dict with keys equal to self.generator_keys. Each key indexes a
+        single value, produced by iterating over the corresponding sequences
+        in dictionary.
+
+        EXAMPLE: Here we use dummy keys ('a', 'b').
+            Input is {'a':[1,2,3],'b':[5,6,7]}.
+            Output's first iteration is:
+                {'a':1,'b':5}
+            The second iteration is
+                {'a':2,'b':6}
+        """
+
+        # make sure content are iterators
+        iter_dictionary = dict(
+            [(key, iter(dictionary[key])) for key in self.generator_keys]
+        )
+        while True:
+            to_fill = dict()
+            for key in self.generator_keys:
+                value = iter_dictionary[key]
+                try:
+                    to_fill[key] = next(value)
+                except StopIteration:
+                    return
+            yield to_fill
+
+    def keys(self):
+        r"""Returns a set of all viable keys for indexing.
+
+        Returns
+        -------
+        Set of all feasible keys.
+        """
+
+        return self.generator_keys.union(set([self.name_key]))
+
+    def reset(self, content):
+        r"""Prepares internal state.
+
+        Internal state includes setting up iterators and queues. The queues are
+        used to temporarily aggregate the output of content's iterators when
+        necessary. The queues are used to aggregate results as we (indirectly)
+        iterate over the input iterables in content.
+
+        Arguments
+        ---------
+        content (list of dicts):
+            list of dictionaries, each of which is the output of a
+            featurization function.  See __init__'s content argument for more
+            details.
+        """
+
+        self.iterators = [self.dictzip(x) for x in content]
+        queues = [SimpleQueue() for _ in self.generator_keys]
+        self._queues = dict(zip(self.generator_keys, queues))
+
+    def _makegenerator(self, key):
+        r"""Creates a generator for a specified key.
+
+        These generators query the internal queues for results from the input
+        dictionaries. If the queues are empty, they try to repopulate them; if
+        that fails, they return.
+
+        Arguments
+        ---------
+        key (hashable):
+            The key used to extract the series from the content dictionaries for
+            aggregation.
+
+        Yields
+        ------
+        Aggregated numpy.ndarrays formed from results under key in content dictionaries.
+
+        EXAMPLE: if "feats" is passed, we return a generator; at each iteration
+        this generator grabs an iteration from the iterator under "feats" from
+        each content dictionary, combines them into a single array, and returns them.
+        """
+
+        while True:
+            try:
+                item = self._queues[key].get(block=False)
+            except Empty:
+                try:
+                    self._populate(exception=False)
+                    item = self._queues[key].get(block=False)
+                except Empty:
+                    return
+            yield item
+
+    def __getitem__(self, key):
+        r"""Implements indexing. Returns generator associated with key or (in
+        the case of names) None.
+
+        Arguments
+        ---------
+        key (hashable):
+            A member of self.generator_keys or \{self.name_key\}. If
+            name_key, then self.names is returned. If a member of
+            generator_keys, a generator which iterates over the aggregated
+            form of that key's content in self.content. See the class
+            description for more details.
+
+        Returns
+        -------
+        Generator or self.names
+        """
+
+        if key in self.generator_keys:
+            return self._makegenerator(key)
+        if key == self.name_key:
+            return self.names
+        raise KeyError("Invalid key; valid keys are {}".format(self.keys()))
+
+    def _populate(self, exception=True):
+        r"""Adds an item to internal queues by continuing source generators one
+        step.
+
+        The internal queues' purposes are to store the output of the input
+        feature data for processing. This method is called when other methods
+        realize the queues are empty.
+
+        Arguments
+        ---------
+        exception (boolean):
+            If true, StopIteration exceptions are not caught; as a result, if
+            the internal iterators are depleted StopIteration will be thrown. If
+            false, this situation is caught and the method simply leaves the
+            queues untouched and returns.
+        """
+
+        if exception:
+            outs = [next(x) for x in self.iterators]
+        else:
+            try:
+                outs = [next(x) for x in self.iterators]
+            except StopIteration:
+                return
+        for key in self.generator_keys:
+            joiner = self.joiners[key]
+            agg = joiner([x[key] for x in outs])
+            self._queues[key].put(agg)
+        return
 
 
 def curry(func, *args, **kwargs):
