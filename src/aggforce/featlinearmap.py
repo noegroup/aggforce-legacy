@@ -7,9 +7,8 @@ import numpy as np
 from numpy.random import choice
 import scipy.sparse as ss
 from qpsolvers import solve_qp
-from .map import CLAMap, smear_map
+from .map import CLAMap
 from .linearmap import reduce_constraint_sets
-from .constfinder import distances
 from queue import SimpleQueue, Empty
 
 
@@ -397,6 +396,75 @@ def multifeaturize(featurizers):
     return composite
 
 
+class Multifeaturize:
+    """Combines multiple featurizers into a single featurizer by creating a
+    callable object. Combination is done lazily where possible.
+
+    Usage:
+        m = Multifeaturize([feat1,feat2])
+        combined_features = m(args)
+
+        where combined_features are featurization results that aggregate over
+        the output of feat1 and feat2 and args are the same args that would have
+        been passed to feat1/feat2. Note that the combined_features is lazy (it
+        uses generators).
+
+    This is an object and not a closure to allow for self description.
+    """
+
+    def __init__(self, featurizers):
+        """Initializes Multifeaturize object from a list of featurizers.
+
+        Arguments
+        ---------
+        featurizers (list of callables):
+            List of featurization callables. See qp_feat_linear_map for more
+            information.
+
+        Returns
+        -------
+        Callable which evaluates and aggregates the output from each element of
+        featurizers.
+        """
+
+        self.featurizers = featurizers
+
+    def __str__(self):
+        sp = "    "
+        msg = []
+        msg.append("{} instance:".format(self.__class__))
+        for ind, func in enumerate(self.featurizers):
+            msg.append("Callable {}:".format(ind))
+            func_msg = [sp + o for o in str(func).split("\n")]
+            msg.extend(func_msg)
+        return "\n".join(msg)
+
+    def __repr__(self):
+        msg = []
+        msg.append("{}():".format(self.__class__))
+        for ind, func in enumerate(self.featurizers):
+            msg.append("C{}:".format(ind))
+            func_msg = repr(func)
+            msg.append(func_msg)
+        return " ".join(msg)
+
+    def __call__(self, *args, **kwargs):
+        """Evaluate each featurizer and return the wrapped output.
+
+        Arguments
+        ---------
+        args/kwargs:
+            Passed to each featurizer.
+
+        Returns
+        -------
+        FeatZipper object wrapping the output of all featurizers.
+        """
+
+        results = [f(*args, **kwargs) for f in self.featurizers]
+        return FeatZipper(content=results)
+
+
 class FeatZipper:
     r"""Lazily combines the output of multiple featurizers.
 
@@ -614,6 +682,73 @@ class FeatZipper:
             agg = joiner([x[key] for x in outs])
             self._queues[key].put(agg)
         return
+
+
+class Curry:
+    """Uses a callable class to curry a function using named and keyword
+    arguments.
+
+    That is: for f(x,y), curry(f,y=a) returns a callable g, where g(b) =
+    f(x=b,y=a). Non-keyword arguments also work--- they are passed after any
+    non-keyword arguments passed to g.  Useful when creating a featurization
+    function with certain options set.
+
+    This is an object and not a closure to allow for self description.
+    """
+
+    def __init__(self, func, *args, **kwargs):
+        """Initialize a Curry object from a function and arguments.
+
+        Arguments
+        ---------
+        func (callable):
+            Function to be curried.
+        args/kwargs:
+            Used to curry func.
+
+        Returns
+        -------
+        Callable which evaluates func appending args and kwargs to any passed
+        arguments.
+        """
+
+        self.args = args
+        self.kwargs = kwargs
+        self.func = func
+
+    def __str__(self):
+        sp = "    "
+        func_msg = [sp + o for o in str(self.func).split("\n")]
+        args_msg = [sp + o for o in str(self.args).split("\n")]
+        kwargs_msg = [sp + o for o in str(self.kwargs).split("\n")]
+        msg = []
+        msg.append("{} instance:".format(self.__class__))
+        msg.append("callable:")
+        msg.extend(func_msg)
+        msg.append("args:")
+        msg.extend(args_msg)
+        msg.append("kwargs:")
+        msg.extend(kwargs_msg)
+        return "\n".join(msg)
+
+    def __repr__(self):
+        func_msg = repr(self.func)
+        args_msg = repr(self.args)
+        kwargs_msg = repr(self.kwargs)
+        msg = []
+        msg.append("{}():".format(self.__class__))
+        msg.append("C:")
+        msg.append(func_msg)
+        if len(self.args):
+            msg.append("Ar:")
+            msg.append(args_msg)
+        if len(self.kwargs):
+            msg.append("Kw:")
+            msg.append(kwargs_msg)
+        return " ".join(msg)
+
+    def __call__(self, *sub_args, **sub_kwargs):
+        return self.func(*sub_args, *self.args, **sub_kwargs, **self.kwargs)
 
 
 def curry(func, *args, **kwargs):
