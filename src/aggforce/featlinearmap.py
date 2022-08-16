@@ -488,10 +488,6 @@ class FeatZipper:
     over as needed (in the case of lazy features, this implies that memory and
     computation is performed only when needed by the aggregate output) and
     served through the provided generators.
-
-    Note that when new data is generated (when the generators are iterated),
-    features and divergences are both generated and cached, even if only one of
-    the two is used at that particular moment.
     """
 
     # these keys provide understanding into the feature dictionary format
@@ -528,44 +524,6 @@ class FeatZipper:
         # no current support for names
         self.names = None
 
-    def dictzip(self, dictionary):
-        r"""Takes a dictionary of iterables and returns an generator that serves
-        a dictionary with a single iteration's contents, similar to zip.
-
-        Arguments
-        ---------
-        dictionary (dict):
-            dictionary with entries for each key in self.generator_keys. Each
-            key must index an iterable. Other keys are ignored.
-
-        Yields
-        ------
-        A dict with keys equal to self.generator_keys. Each key indexes a
-        single value, produced by iterating over the corresponding sequences
-        in dictionary.
-
-        EXAMPLE: Here we use dummy keys ('a', 'b').
-            Input is {'a':[1,2,3],'b':[5,6,7]}.
-            Output's first iteration is:
-                {'a':1,'b':5}
-            The second iteration is
-                {'a':2,'b':6}
-        """
-
-        # make sure content are iterators
-        iter_dictionary = dict(
-            [(key, iter(dictionary[key])) for key in self.generator_keys]
-        )
-        while True:
-            to_fill = dict()
-            for key in self.generator_keys:
-                value = iter_dictionary[key]
-                try:
-                    to_fill[key] = next(value)
-                except StopIteration:
-                    return
-            yield to_fill
-
     def keys(self):
         r"""Returns a set of all viable keys for indexing.
 
@@ -592,7 +550,9 @@ class FeatZipper:
             details.
         """
 
-        self.iterators = [self.dictzip(x) for x in content]
+        self.source = dict()
+        for key in self.generator_keys:
+            self.source.update({key: zip(*[o[key] for o in content])})
         queues = [SimpleQueue() for _ in self.generator_keys]
         self._queues = dict(zip(self.generator_keys, queues))
 
@@ -623,7 +583,7 @@ class FeatZipper:
                 item = self._queues[key].get(block=False)
             except Empty:
                 try:
-                    self._populate(exception=False)
+                    self._populate(key=key, exception=False)
                     item = self._queues[key].get(block=False)
                 except Empty:
                     return
@@ -653,7 +613,7 @@ class FeatZipper:
             return self.names
         raise KeyError("Invalid key; valid keys are {}".format(self.keys()))
 
-    def _populate(self, exception=True):
+    def _populate(self, key=None, exception=True):
         r"""Adds an item to internal queues by continuing source generators one
         step.
 
@@ -663,6 +623,9 @@ class FeatZipper:
 
         Arguments
         ---------
+        key (hashable or None):
+            Specifies which queue to refill. Should be one of the keys in
+            self.generator_keys. If None, all queues refilled.
         exception (boolean):
             If true, StopIteration exceptions are not caught; as a result, if
             the internal iterators are depleted StopIteration will be thrown. If
@@ -670,17 +633,18 @@ class FeatZipper:
             queues untouched and returns.
         """
 
-        if exception:
-            outs = [next(x) for x in self.iterators]
+        if key is None:
+            keys = self.generator_keys
         else:
+            keys = [key]
+        for key in keys:
             try:
-                outs = [next(x) for x in self.iterators]
-            except StopIteration:
-                return
-        for key in self.generator_keys:
-            joiner = self.joiners[key]
-            agg = joiner([x[key] for x in outs])
-            self._queues[key].put(agg)
+                data = next(self.source[key])
+                agg = self.joiners[key](data)
+                self._queues[key].put(agg)
+            except StopIteration as e:
+                if exception:
+                    raise e
         return
 
 
