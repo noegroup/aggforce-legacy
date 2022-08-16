@@ -100,7 +100,7 @@ def gb_feat(
     )
     max_channels = max(ids)
 
-    # shared option dict for JAX calls
+    # shared option dict for featurization and div calls
     f_kwargs = dict(
         channels=ids,
         max_channels=max_channels,
@@ -111,12 +111,26 @@ def gb_feat(
         n_basis=n_basis,
     )
 
-    # prep for feature generator
-    def feater(arg_cg_site):
+    # we use abatch to break down computation. In order to do so, we make
+    # wrapped callables that take simpler arguments
+
+    def subfeater(arg_inds, arg_cg_site):
+        sub_points = points[arg_inds]
+        sub_cg_points = cg_points[arg_inds]
         feat = gb_subfeat(
-            points=points,
-            cg_points=cg_points[:, arg_cg_site : (arg_cg_site + 1), :],
+            points=sub_points,
+            cg_points=sub_cg_points[:, arg_cg_site : (arg_cg_site + 1), :],
             **f_kwargs,
+        )
+        return feat
+
+    # subsetted by abatch in feater and divver to mark where to evaluate
+    inds = np.arange(len(points))
+
+    # make function which batches the JAX calls to keep memory usage down
+    def feater(cg_site):
+        feat = abatch(
+            func=subfeater, arr=inds, arg_cg_site=cg_site, chunk_size=batch_size
         )
         return np.asarray(feat)
 
@@ -125,7 +139,7 @@ def gb_feat(
     else:
         feats = [feater(x) for x in range(cmap.n_cg_sites)]
 
-    # prep for divergences generator
+    # now do the same for divergences
 
     # this function takes a set of indices for subsetting, this makes it
     # compatible with abatch
@@ -139,8 +153,6 @@ def gb_feat(
             **f_kwargs,
         )
         return div
-
-    inds = np.arange(len(points))
 
     # make function which batches the JAX calls to keep memory usage down
     def divver(cg_site):
@@ -373,7 +385,7 @@ def channel_allocate(feats, channels, max_channels, jac_shape=False):
     ---------
     feats (jnp.DeviceArray):
         Array containing the features for each fine-grained site at each frame.  Assumed
-        to be of shape (n_frames, n_fg_sites, n_feats) or 
+        to be of shape (n_frames, n_fg_sites, n_feats) or
         (n_feats, n_frames, n_fg_sites, n_dim) (see jac_shape).
     channels (tuple of positive integers):
         Tuple of integers with the length being the number of fine-grained sites
@@ -532,12 +544,18 @@ def gb_subfeat(
     return collapsed
 
 
-#@partial(
+# @partial(
 #   jax.jit,
 #   static_argnames=["inner", "outer", "channels", "max_channels", "method", "n_basis"],
-#)
+# )
 def gb_subfeat_jac(
-    points, cg_points, channels, max_channels, smear_mat=None, method="reorder", **kwargs
+    points,
+    cg_points,
+    channels,
+    max_channels,
+    smear_mat=None,
+    method="reorder",
+    **kwargs,
 ):
     """Calculates per frame (collapsed) divergences for gb_subfeat.
 
