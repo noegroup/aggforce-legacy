@@ -38,7 +38,7 @@ def guess_pairwise_constraints(xyz, threshold=1e-3):
     return set(frozenset(v) for v in zip(*inds))
 
 
-def distances(xyz, return_matrix=True):
+def distances(xyz, cross_xyz=None, return_matrix=True, return_displacements=False):
     """Calculates the distances for each frame in a trajectory.
 
     Returns an array where each slice is the distance matrix of a single frame
@@ -49,20 +49,50 @@ def distances(xyz, return_matrix=True):
     xyz (np.ndarray):
         An array describing the cartesian coordinates of a system over time;
         assumed to be of shape (n_steps,n_sites,n_dim).
+    cross_xyz (np.ndarray or None):
+        An array describing the Cartesian coordinates of a different system over
+        time or None; assumed to be of shape (n_steps,other_n_sites,n_dim). If
+        present, then the returned distances are those between xyz and cross_xyz
+        at each frame.  If present, return_matrix must be truthy.
     return_matrix (boolean):
         If true, then complete (symmetric) distance matrices are returned; if
         false, the upper half of each distance matrix is extracted, flattened,
         and then returned.
+    return_displacements (boolean):
+        If true, then instead of a distance array, an array of displacements is
+        returned.
 
     Returns
     -------
-    If return_matrix, returns a 3-dim numpy.ndarray of shape
-    (n_steps,n_sites,n_sites), where the first index is the time step index and
-    the second two are site indices. If not return_matrix, return a 2-dim array
-    (n_steps,n_distances), where n_distances indexes unique distances.
+    Returns numpy.ndarrays, where the number of dimensions and size depend on
+    the arguments.
+
+    If return_displacements is False:
+        If return_matrix and cross_xyz is None, returns a 3-dim numpy.ndarray of
+        shape (n_steps,n_sites,n_sites), where the first index is the time step
+        index and the second two are site indices. If return_matrix and
+        cross_xyz is not None, then an array of shape
+        (n_steps,other_n_sites,n_sites) is returned. If not return_matrix,
+        return a 2-dim array (n_steps,n_distances), where n_distances indexes
+        unique distances.
+    else:
+        return_matrix must be true, and a 4 dimensional array is returned,
+        similar to the shapes above but with an additional terminal axis for
+        dimension.
     """
 
-    distance_matrix = np.linalg.norm(xyz[:, None, :, :] - xyz[:, :, None, :], axis=-1)
+    if cross_xyz is not None and not return_matrix:
+        raise ValueError("Cross distances only supported when return_matrix is truthy.")
+    if return_displacements and not return_matrix:
+        raise ValueError("Displacements only supported when return_matrix is truthy.")
+
+    if cross_xyz is None:
+        displacement_matrix = xyz[:, None, :, :] - xyz[:, :, None, :]
+    else:
+        displacement_matrix = xyz[:, None, :, :] - cross_xyz[:, :, None, :]
+    if return_displacements:
+        return displacement_matrix
+    distance_matrix = np.linalg.norm(displacement_matrix, axis=-1)
     if return_matrix:
         return distance_matrix
     n_sites = distance_matrix.shape[-1]
