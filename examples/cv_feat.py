@@ -108,7 +108,7 @@ def gen_config_map(pdb, string, n_sites):
     inds = []
     atomlist = list(pdb.topology.atoms)
     for ind, a in enumerate(atomlist):
-        if re.search("CA$", str(a)):
+        if re.search(string, str(a)):
             inds.append([ind])
     return lm.LinearMap(inds, n_fg_sites=n_sites)
 
@@ -349,13 +349,20 @@ def main():
     # dependent maps. We scan over the featurizer used and the l2_regularization
     # imposed. The featurizer is a single argument, so we first generate a
     # "grid" of featurizers, each of which has a different hyperparameter set.
+    # featurizers = gen_feater_grid(
+    #    inner=[0.0, 1.0, 2.0, 3.0],
+    #    outer=[7.0, 8.0, 9.0],
+    #    n_basis=[8, 9],
+    #    width=[0.7, 1.0, 1.3],
+    # )
+    # l2_regs = [5e1, 1e2]
     featurizers = gen_feater_grid(
-        inner=[0.0, 1.0, 2.0, 3.0],
-        outer=[7.0, 8.0, 9.0],
-        n_basis=[8, 9],
-        width=[0.7, 1.0, 1.3],
+        inner=[0.0],
+        outer=[7.0],
+        n_basis=[5],
+        width=[5],
     )
-    l2_regs = [5e1, 5e2]
+    l2_regs = [1e2, 1e3]
     # we then combine the l2_regs and featurizer lists into a single dictionary.
     # This is that is passed to the cross validation function, which will scan
     # over each combination from the two list entries
@@ -381,9 +388,10 @@ def main():
 
     # summary is a more readable DataFrame of the results of the cross
     # validation
-    summary_null = make_df(control_featted_results, key="scores")
-    summary_null.to_csv("cv_null.csv")
-    summary = make_df(featted_results, key="scores")
+    key = "scores"
+    summary = make_df(featted_results, key=key)
+    reference_score = min(y for x, y in control_featted_results[key].items())
+    summary["adjusted"] = summary[key] - reference_score
     summary.to_csv("cv.csv")
     prune(summary).to_csv("pruned_cv.csv")
 
