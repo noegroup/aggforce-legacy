@@ -208,9 +208,13 @@ def abatch(func, arr, chunk_size, *args, **kwargs):
 
 
 @partial(
-    jax.jit, inline=True, static_argnames=["return_matrix", "return_displacements"]
+    jax.jit,
+    inline=True,
+    static_argnames=["return_matrix", "return_displacements", "square"],
 )
-def distances(xyz, cross_xyz=None, return_matrix=True, return_displacements=False):
+def distances(
+    xyz, cross_xyz=None, return_matrix=True, return_displacements=False, square=False
+):
     """Calculates differentiable distances for each frame in a trajectory.
 
     Returns an array where each slice is the distance matrix of a single frame
@@ -267,7 +271,10 @@ def distances(xyz, cross_xyz=None, return_matrix=True, return_displacements=Fals
         displacement_matrix = xyz[:, None, :, :] - cross_xyz[:, :, None, :]
     if return_displacements:
         return displacement_matrix
-    distance_matrix = jnp.linalg.norm(displacement_matrix, axis=-1)
+    if square:
+        distance_matrix = (displacement_matrix**2).sum(axis=-1)
+    else:
+        distance_matrix = jnp.linalg.norm(displacement_matrix, axis=-1)
     if return_matrix:
         return distance_matrix
     n_sites = distance_matrix.shape[-1]
