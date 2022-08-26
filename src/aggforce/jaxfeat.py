@@ -362,7 +362,10 @@ def clipped_gauss(inp, center, width=1.0, clip=1e-3):
     """
 
     gauss = jnp.exp(-(((inp - center) / width) ** 2))
-    return jnp.clip(a=gauss, a_min=clip) - clip
+    if clip is None:
+        return gauss
+    else:
+        return jnp.clip(a=gauss, a_min=clip) - clip
 
 
 @partial(
