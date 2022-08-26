@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest "qpsolvers[starter_solvers]"
+          pip install pytest "qpsolvers[starter_solvers]" "jax[cpu]"
       - name: Install package
         run: |
           pip install .
