@@ -271,7 +271,7 @@ def distances(xyz, cross_xyz=None, return_matrix=True, return_displacements=Fals
     if return_matrix:
         return distance_matrix
     n_sites = distance_matrix.shape[-1]
-    indices0, indices1 = jnp.triu_indices(row=n_sites, col=n_sites, offset=1)
+    indices0, indices1 = jnp.triu_indices(n_sites, k=1)
     subsetted_distances = distance_matrix[:, indices0, indices1]
     return subsetted_distances
 
