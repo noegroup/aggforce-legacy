@@ -208,9 +208,13 @@ def abatch(func, arr, chunk_size, *args, **kwargs):
 
 
 @partial(
-    jax.jit, inline=True, static_argnames=["return_matrix", "return_displacements"]
+    jax.jit,
+    inline=True,
+    static_argnames=["return_matrix", "return_displacements", "square"],
 )
-def distances(xyz, cross_xyz=None, return_matrix=True, return_displacements=False):
+def distances(
+    xyz, cross_xyz=None, return_matrix=True, return_displacements=False, square=False
+):
     """Calculates differentiable distances for each frame in a trajectory.
 
     Returns an array where each slice is the distance matrix of a single frame
@@ -267,11 +271,14 @@ def distances(xyz, cross_xyz=None, return_matrix=True, return_displacements=Fals
         displacement_matrix = xyz[:, None, :, :] - cross_xyz[:, :, None, :]
     if return_displacements:
         return displacement_matrix
-    distance_matrix = jnp.linalg.norm(displacement_matrix, axis=-1)
+    if square:
+        distance_matrix = (displacement_matrix**2).sum(axis=-1)
+    else:
+        distance_matrix = jnp.linalg.norm(displacement_matrix, axis=-1)
     if return_matrix:
         return distance_matrix
     n_sites = distance_matrix.shape[-1]
-    indices0, indices1 = jnp.triu_indices(row=n_sites, col=n_sites, offset=1)
+    indices0, indices1 = jnp.triu_indices(n_sites, k=1)
     subsetted_distances = distance_matrix[:, indices0, indices1]
     return subsetted_distances
 
@@ -355,7 +362,10 @@ def clipped_gauss(inp, center, width=1.0, clip=1e-3):
     """
 
     gauss = jnp.exp(-(((inp - center) / width) ** 2))
-    return jnp.clip(a=gauss, a_min=clip) - clip
+    if clip is None:
+        return gauss
+    else:
+        return jnp.clip(a=gauss, a_min=clip) - clip
 
 
 @partial(
