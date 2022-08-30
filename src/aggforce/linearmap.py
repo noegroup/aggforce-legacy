@@ -11,7 +11,7 @@ from .map import LinearMap
 def qp_linear_map(
     forces,
     config_mapping,
-    constrained_inds=None,
+    constraints=None,
     l2_regularization=0.0,
     xyz=None,
     solver_args=dict(
@@ -34,7 +34,7 @@ def qp_linear_map(
         forces of the FG sites as a function of time.
     config_mapping (np.ndarray):
         LinearMap object which characterizes configurational map.
-    constrained_inds (set of frozensets):
+    constraints (set of frozensets):
         Each entry is a frozenset of indices, the group of which is constrained.
         Currently, only bond constraints (frozensets of size 2) are supported.
     l2_regularization (float):
@@ -54,7 +54,7 @@ def qp_linear_map(
     reshaped_fs = qp_form(forces)
     # construct geom constraint matrix
     # prep matrices for solver
-    con_mat = make_bond_constraint_matrix(config_mapping.n_fg_sites, constrained_inds)
+    con_mat = make_bond_constraint_matrix(config_mapping.n_fg_sites, constraints)
     reg_mat = np.matmul(reshaped_fs, con_mat)
     qp_mat = np.matmul(reg_mat.T, reg_mat)
     zero_q = np.zeros(qp_mat.shape[0])
@@ -255,7 +255,7 @@ def constraint_lookup_dict(constraints):
 
 def constraint_aware_uni_map(
     config_mapping,
-    constrained_inds=None,
+    constraints=None,
     xyz=None,
     forces=None,
 ):
@@ -281,7 +281,7 @@ def constraint_aware_uni_map(
     config_mapping (linearmap.LinearMap):
         LinearMap object characterizing the configurational map characterizing
         the connection between the fine-grained and coarse-grained systems.
-    constrained_inds (None or set of frozen sets):
+    constraints (None or set of frozen sets):
         Each set entry is a set of indices, the group of which is constrained.
         Currently, only bond constraints (frozen sets of 2 elements) are supported.
     xyz:
@@ -296,7 +296,7 @@ def constraint_aware_uni_map(
 
     # get which sites have nonzero contributions to each cg site
     cg_sets = [set(np.nonzero(row)[0]) for row in config_mapping.standard_matrix]
-    constraints = reduce_constraint_sets(constrained_inds)
+    constraints = reduce_constraint_sets(constraints)
     # add atoms which are related by constraint to those already in cg sites
     for group in cg_sets:
         _ = [group.update(x) for x in constraints if group.intersection(x)]
