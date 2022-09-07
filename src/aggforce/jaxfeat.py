@@ -18,6 +18,7 @@ def gb_feat(
     inner=0,
     n_basis=10,
     width=1.0,
+    dist_power=0.5,
     batch_size=None,
     lazy=True,
     div_method="reorder",
@@ -59,6 +60,12 @@ def gb_feat(
     width (positive integer):
         Controls the width of each Gaussian. Gaussians are roughly calculated as
         exp(-d**2/width), where d is the distance.
+    dist_power (positive float):
+        Controls the spacing and scaling of the Gaussians. Values greater than 1
+        concentrate Gaussians towards outer, values between 0 and 1 concentrate
+        Gaussians towards inner. Areas with more concentrated Gaussians also
+        have Gaussians of less variance. See gaussian_dist_basis for more
+        information.
     batch_size (positive integer):
         Number of trajectory frames to feed into JAX at once. Larger values are
         faster but use more memory.
@@ -109,6 +116,7 @@ def gb_feat(
         outer=outer,
         width=width,
         n_basis=n_basis,
+        dist_power=dist_power,
     )
 
     # we use abatch to break down computation. In order to do so, we make
