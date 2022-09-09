@@ -291,6 +291,85 @@ def distances(
     return subsetted_distances
 
 
+class Whiten:
+    """JAX'd data whitener. Normalizes data by its mean and standard deviation.
+
+    This class can be trained on on dataset and the derived scaling parameters
+    can be applied to another dataset.
+    """
+
+    def __init__(self, axis, stop_grad=True):
+        """Initializes data whitener.
+
+        Arguments
+        ---------
+        axis (integer or list of integers):
+            Specifies which axis the means and standard deviations should be
+            taken with respect to. Directly passed to .mean and .std calls.
+        stop_grad (boolean):
+            If true, then any gradients calculated of the output of the function
+            w.r.t. to the input will make the assumption that the offset and
+            scaling are fixed and not data dependent. This should likely be set
+            to true.
+        """
+
+        self.is_fit = False
+        self.axis = axis
+        self.stop_grad = stop_grad
+
+    def fit(self, data):
+        """Extract the mean and standard deviation from data and store it for
+        future transformations.
+
+        NOTE: The axis used for the mean and standard deviation are set at
+        initialization.
+
+        NOTE: data should be a jax.DeviceArray.
+        """
+
+        self.is_fit = True
+        mean = jnp.mean(data, axis=self.axis, keepdims=True)
+        if self.stop_grad:
+            self.mean = jax.lax.stop_gradient(mean)
+        else:
+            self.mean = mean
+        std = jnp.std(data, axis=self.axis, keepdims=True)
+        if self.stop_grad:
+            self.std = jax.lax.stop_gradient(std)
+        else:
+            self.std = std
+        return self
+
+    def transform(self, data):
+        """Whitens data according to previously determine mean and standard
+        deviation. Will raise a ValueError if .fit has not previously been
+        called.
+
+        NOTE: data should be a jax.DeviceArray.
+        """
+
+        if not self.is_fit:
+            raise ValueError("self.fit must be called before self.transform.")
+        return _whiten_helper(data=data, mean=self.mean, std=self.std)
+
+    def __call__(self, data):
+        """Whitens data according to previously determine mean and standard
+        deviation. Will raise a ValueError if .fit has not previously been
+        called.
+        """
+
+        return self.transform(data)
+
+
+@jax.jit
+def _whiten_helper(data, mean, std):
+    """Simpler transform used in the Whiten class. Isolated so that it can be
+    wrapped via jax.jit.
+    """
+
+    return (data - mean) / std
+
+
 @partial(jax.jit, inline=True, static_argnames=["n_basis"])
 def gaussian_dist_basis(
     dists, outer, inner=0, n_basis=10, width=1.0, dist_power=0.5, clip=1e-3
@@ -374,6 +453,14 @@ def clipped_gauss(inp, center, width=1.0, clip=1e-3):
         return gauss
     else:
         return jnp.clip(a=gauss, a_min=clip) - clip
+
+
+def _id(x):
+    """Identity function for single argument. Useful as a default argument value
+    in other callables.
+    """
+
+    return x
 
 
 @partial(
