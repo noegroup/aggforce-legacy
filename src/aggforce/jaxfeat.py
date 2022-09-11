@@ -318,22 +318,30 @@ class Whiten:
         self.stop_grad = stop_grad
 
     def fit(self, data):
-        """Extract the mean and standard deviation from data and store it for
-        future transformations.
+        """Fits whitening transform on data.
 
-        NOTE: The axis used for the mean and standard deviation are set at
-        initialization.
+        NOTE: data should be an individual or list of jax.DeviceArray(s).
 
-        NOTE: data should be a jax.DeviceArray.
+        Arguments
+        ---------
+        data (jax.DeviceArray or list of jax.DeviceArray):
+            Data used to parameterize the model. May be a list of arrays or an
+            individual array of shape (n_frames,n_dim).  The exact shape of
+            array that is accepted depends on the provided featurization
+            function.
         """
 
         self.is_fit = True
-        mean = jnp.mean(data, axis=self.axis, keepdims=True)
+        if isinstance(data, list):
+            comb_data = np.concatenate(data, axis=0)
+        else:
+            comb_data = data
+        mean = jnp.mean(comb_data, axis=self.axis, keepdims=True)
         if self.stop_grad:
             self.mean = jax.lax.stop_gradient(mean)
         else:
             self.mean = mean
-        std = jnp.std(data, axis=self.axis, keepdims=True)
+        std = jnp.std(comb_data, axis=self.axis, keepdims=True)
         if self.stop_grad:
             self.std = jax.lax.stop_gradient(std)
         else:
@@ -345,17 +353,50 @@ class Whiten:
         deviation. Will raise a ValueError if .fit has not previously been
         called.
 
-        NOTE: data should be a jax.DeviceArray.
+        NOTE: fit must be called before transform or a ValueError will be
+        raised.
+
+        NOTE: data should be an individual or list of jax.DeviceArray(s).
+
+        Arguments
+        ---------
+        data (jax.DeviceArray or list of jax.DeviceArray):
+            Data used to be transformed. May be a list of arrays or an
+            individual array of shape (n_frames,n_dim).  The exact shape of
+            array that is accepted depends on the provided featurization
+            function.
         """
 
         if not self.is_fit:
             raise ValueError("self.fit must be called before self.transform.")
-        return _whiten_helper(data=data, mean=self.mean, std=self.std)
+        if isinstance(data, list):
+            naked = False
+        else:
+            naked = True
+            data = [data]
+        wd = [_whiten_helper(data=x, mean=self.mean, std=self.std) for x in data]
+        if naked:
+            return wd[0]
+        else:
+            return wd
 
     def __call__(self, data):
         """Whitens data according to previously determine mean and standard
         deviation. Will raise a ValueError if .fit has not previously been
         called.
+
+        NOTE: fit must be called before this method or a ValueError will be
+        raised.
+
+        NOTE: data should be an individual or list of jax.DeviceArray(s).
+
+        Arguments
+        ---------
+        data (jax.DeviceArray or list of jax.DeviceArray):
+            Data used to be transformed. May be a list of arrays or an
+            individual array of shape (n_frames,n_dim).  The exact shape of
+            array that is accepted depends on the provided featurization
+            function.
         """
 
         return self.transform(data)

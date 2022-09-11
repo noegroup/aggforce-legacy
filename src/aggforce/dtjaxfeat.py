@@ -356,8 +356,10 @@ class JaxTICA:
         Arguments
         ---------
         featurizer (callable):
-            Function to applied to input before subsequent whitening and TICA
-            analysis. Note that featurizer is applied _before_ any whitening.
+            Function to applied to input in array form before subsequent
+            whitening and TICA analysis. Note that featurizer is applied
+            _before_ any whitening and should be written to accept arrays (if
+            list input is provided, it is run across each element).
         dim (positive integer):
             Number of dimensions of TICA output to return. Note that lowering
             this number does not reduce the computational cost in the current
@@ -374,18 +376,31 @@ class JaxTICA:
     def fit(self, data):
         """Fits whitening and TICA transforms on data.
 
-        NOTE: data should be a jax.DeviceArray.
+        NOTE: data should be an individual or list of jax.DeviceArray(s).
+
+        Data is first featurized. Featurized data is then used to train the
+        whitener; this whitener is then used to whiten the featurized data. The
+        resulting output is then fed into the internal TICA engine for fitting.
+
+        Arguments
+        ---------
+        data (jax.DeviceArray or list of jax.DeviceArray):
+            Data used to parameterize the model. May be a list of arrays or an
+            individual array of shape (n_frames,n_dim). Note that mdtraj-shaped
+            (n_frames,n_sites,n_dims) arrays are not accepted.
         """
 
         self.is_fit = True
-
-        feats = self.featurizer(data)
+        if not isinstance(data, list):
+            data = [data]
+        feats = [self.featurizer(x) for x in data]
         self.whiten = Whiten(axis=0).fit(feats)
         white_feats = self.whiten(feats)
 
-        self._tica.fit(np.asarray(white_feats))
+        self._tica.fit([np.asarray(x) for x in white_feats])
         model = self._tica.fetch_model()
         self.transform_matrix = jnp.asarray(model.singular_vectors_left)
+
         return self
 
     def transform(self, data):
@@ -394,18 +409,34 @@ class JaxTICA:
         NOTE: fit must be called before transform or a ValueError will be
         raised.
 
-        NOTE: data should be a jax.DeviceArray.
+        NOTE: data should be an individual or list of jax.DeviceArray(s).
+
+        Arguments
+        ---------
+        data (jax.DeviceArray or list of jax.DeviceArray):
+            Data used to be transformed. May be a list of arrays or an
+            individual array of shape (n_frames,n_dim). Note that mdtraj-shaped
+            (n_frames,n_sites,n_dims) arrays are not accepted.
         """
 
         if not self.is_fit:
             raise ValueError("self.fit must be called before self.transform.")
-        feats = self.featurizer(data)
-        white_feats = self.whiten(feats)
-        all_coords = jnp.matmul(white_feats, self.transform_matrix)
-        if self.dim is None:
-            return all_coords
+        if isinstance(data, list):
+            naked = False
         else:
-            return all_coords[:, 0 : self.dim]
+            naked = True
+            data = [data]
+        feats = [self.featurizer(x) for x in data]
+        white_feats = self.whiten(feats)
+        all_coords = [jnp.matmul(x, self.transform_matrix) for x in white_feats]
+        if self.dim is None:
+            filtered = all_coords
+        else:
+            filtered = [x[:, 0 : self.dim] for x in all_coords]
+        if naked:
+            return filtered[0]
+        else:
+            return filtered
 
     def __call__(self, data):
         """Transforms data through the whitened featurized TICA transform.
@@ -413,7 +444,14 @@ class JaxTICA:
         NOTE: fit must be called before transform or a ValueError will be
         raised.
 
-        NOTE: data should be a jax.DeviceArray.
+        NOTE: data should be an individual or list of jax.DeviceArray(s).
+
+        Arguments
+        ---------
+        data (jax.DeviceArray or list of jax.DeviceArray):
+            Data used to be transformed. May be a list of arrays or an
+            individual array of shape (n_frames,n_dim). Note that mdtraj-shaped
+            (n_frames,n_sites,n_dims) arrays are not accepted.
         """
 
         return self.transform(data)
