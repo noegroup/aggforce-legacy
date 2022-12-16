@@ -10,7 +10,7 @@ Install the aggforce package from source by calling `pip install .`
 To install the quadratic programming solvers required to find optimized force mappings 
 which do not depend on configurations:
 ```
-pip install "qpsolvers[starter_solvers]"
+pip install "qpsolvers[open_source_solvers]"
 ```
 In order to use the built-in featurizers to find configurationally dependent
 force mappings, [JAX](https://github.com/google/jax) must be installed. For
