@@ -136,7 +136,7 @@ optim_results = ag.project_forces(
 # look at examples directory for more details
 ```
 
-### aggforce
+### Testing
 
 Tests are provided via `pytest`, and may be run if installation is performed with the 
 `[test]` target. To avoid tests which require `jax`, exclude test with the `jax` marker. 
