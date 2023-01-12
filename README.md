@@ -4,22 +4,18 @@ A package to aggregate atomistic forces to estimate the forces of a given
 manybody potential of mean force. 
 
 ### Installation
-Install the aggforce package from source by calling `pip install .`
- from the repository's root directory.
 
-To install the quadratic programming solvers required to find optimized force mappings 
-which do not depend on configurations:
-```
-pip install "qpsolvers[open_source_solvers]"
-```
+Install the aggforce package from source by calling `pip install .`,  
+`pip install .[nonlinear]`, or `pip install .[test]` from the 
+repository's root directory. The initial option will install only what is 
+needed to optimize linear maps, the second will install what is needed for 
+featurized (nonlinear) maps, and the third allows one to run `pytest`.
+
 In order to use the built-in featurizers to find configurationally dependent
-force mappings, [JAX](https://github.com/google/jax) must be installed. For
-simple CPU accelerated installations, the following typically suffices:
-```
-pip install --upgrade "jax[cpu]"
-```
-However, it is often neccesary to install a GPU accelerated version of JAX. For
-instructions on how to do so, see the JAX 
+force mappings, [JAX](https://github.com/google/jax) must be installed. 
+The `[nonlinear]` and `[test]` targets satisfy this using a CPU accelerated 
+version of JAX.  However, it is often necessary to install a GPU 
+accelerated version; for instructions on how to do so, see the JAX 
 [documentation](https://github.com/google/jax).
 
 ### Example usage
@@ -27,7 +23,7 @@ instructions on how to do so, see the JAX
 The following code shows how to generate an optimal linear force aggregation
 map that does not change based on molecular configuration. We grab test data, 
 create a carbon alpha configurational mapping, detect
-constrained bonds from the trajectory, and then produce and apply an optimize
+constrained bonds from the trajectory, and then produce and apply an optimized
 force aggregation map to the trajectory.
 
 ```python
@@ -94,8 +90,8 @@ configuration can be created as follows. However, first note that this approach
 depends on features: these features control how the map can change as a function
 of configuration.  Second, note that JAX must be installed to use the features
 included in this library (as we do here). Finally, note that this approach is
-much more computationally expensive that the static mappings and has not yet
-been shown to produce significantly better force mappings.
+much more computationally expensive than the static mappings and has not yet
+been shown to produce significantly better results.
 
 ```python
 from aggforce import linearmap as lm
@@ -139,3 +135,10 @@ optim_results = ag.project_forces(
 
 # look at examples directory for more details
 ```
+
+### aggforce
+
+Tests are provided via `pytest`, and may be run if installation is performed with the 
+`[test]` target. To avoid tests which require `jax`, exclude test with the `jax` marker. 
+Note that certain tests use a different quadratic programming back end, `scs`, than 
+is default for the main code base.

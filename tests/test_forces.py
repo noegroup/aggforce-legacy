@@ -43,7 +43,6 @@ import pytest
 from aggforce import agg as ag
 from aggforce import linearmap as lm
 from aggforce import constfinder as cf
-from aggforce import jaxmapval as mv
 
 
 # this seeds some portions of the randomness of these tests, but not be
@@ -215,6 +214,8 @@ def test_cln025_opt_basic_rsqpg_mscg_ip(seed=rseed):
     This test requires JAX since our strategy for G uses JAX's
     autodifferentiation.
     """
+    
+    from aggforce import jaxmapval as mv
 
     coords, forces, pdb, kbt = get_data()
     # cmap is the configurational coarse-grained map
@@ -317,6 +318,8 @@ def test_cln025_opt_basic_rsqpg_offset(seed=rseed):
     autodifferentiation.
     """
 
+    from aggforce import jaxmapval as mv
+
     coords, forces, pdb, kbt = get_data()
     # cmap is the configurational coarse-grained map
     cmap = gen_config_map(pdb, "CA$", coords.shape[1])
@@ -395,6 +398,7 @@ def test_cln025_featopt_opt_rsqpg_mscg_ip(seed=rseed):
     marginal gain in the force score.
     """
 
+    from aggforce import jaxmapval as mv
     from aggforce import featlinearmap as p
     from aggforce import jaxfeat as jf
 
@@ -487,6 +491,7 @@ def test_cln025_featopt_opt_rsqpg_offset(seed=rseed):
     marginal gain in the force score.
     """
 
+    from aggforce import jaxmapval as mv
     from aggforce import featlinearmap as p
     from aggforce import jaxfeat as jf
 
