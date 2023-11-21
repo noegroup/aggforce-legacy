@@ -23,9 +23,7 @@ from .jaxfeat import distances, clipped_gauss
 
 
 def random_uniform_forces(
-    positions,
-    scale=1.0,
-    randg=None,
+    positions, scale=1.0, randg=None,
 ):
     r"""Returns the forces of a random linear (ramp) force-field applied to each
     frame in a trajectory.
@@ -57,19 +55,11 @@ def random_uniform_forces(
     shape = positions.shape
     x, y, z = 2 * randg.random(size=3) - 1
     force = np.array([x, y, z])
-    force /= ((force**2).sum()) ** (0.5)
+    force /= ((force ** 2).sum()) ** (0.5)
     force *= scale
     expanded_force = force[None, None, :]
-    parti_tiled_force = np.repeat(
-        expanded_force,
-        repeats=shape[0],
-        axis=0,
-    )
-    tiled_force = np.repeat(
-        parti_tiled_force,
-        repeats=shape[1],
-        axis=1,
-    )
+    parti_tiled_force = np.repeat(expanded_force, repeats=shape[0], axis=0,)
+    tiled_force = np.repeat(parti_tiled_force, repeats=shape[1], axis=1,)
     return tiled_force
 
 
@@ -109,9 +99,9 @@ def rsqpg_forces(positions, inner, outer, width, randg=None, sq_args=True):
     """
 
     if sq_args:
-        outer = outer**2
-        inner = inner**2
-        width = width**2
+        outer = outer ** 2
+        inner = inner ** 2
+        width = width ** 2
     if randg is None:
         randg = r.default_rng()
     interval_width = outer - inner

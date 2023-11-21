@@ -349,11 +349,7 @@ def id_feat(points, cmap, constraints, return_ids=False):
 
     divs = np.zeros((n_frames, n_types, n_dim), dtype=np.float32)
 
-    return dict(
-        feats=[feats] * n_cg_sites,
-        divs=[divs] * n_cg_sites,
-        names=None,
-    )
+    return dict(feats=[feats] * n_cg_sites, divs=[divs] * n_cg_sites, names=None,)
 
 
 def multifeaturize(featurizers):

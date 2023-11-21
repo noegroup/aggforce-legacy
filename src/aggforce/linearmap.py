@@ -254,10 +254,7 @@ def constraint_lookup_dict(constraints):
 
 
 def constraint_aware_uni_map(
-    config_mapping,
-    constraints=None,
-    xyz=None,
-    forces=None,
+    config_mapping, constraints=None, xyz=None, forces=None,
 ):
     r"""Produces a uniform basic force map compatible with constraints.
 

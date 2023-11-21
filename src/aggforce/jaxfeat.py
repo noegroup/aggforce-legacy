@@ -174,11 +174,7 @@ def gb_feat(
     else:
         divs = [divver(x) for x in range(cmap.n_cg_sites)]
 
-    return dict(
-        feats=feats,
-        divs=divs,
-        names=None,
-    )
+    return dict(feats=feats, divs=divs, names=None,)
 
 
 def abatch(func, arr, chunk_size, *args, **kwargs):
@@ -280,7 +276,7 @@ def distances(
     if return_displacements:
         return displacement_matrix
     if square:
-        distance_matrix = (displacement_matrix**2).sum(axis=-1)
+        distance_matrix = (displacement_matrix ** 2).sum(axis=-1)
     else:
         distance_matrix = jnp.linalg.norm(displacement_matrix, axis=-1)
     if return_matrix:
@@ -335,7 +331,7 @@ def gaussian_dist_basis(
     the output shape is (2,2,5).
     """
 
-    pow_grid_points = jnp.linspace(inner**dist_power, outer**dist_power, n_basis)
+    pow_grid_points = jnp.linspace(inner ** dist_power, outer ** dist_power, n_basis)
     grid_points = pow_grid_points ** (1 / dist_power)
     feats = [
         clipped_gauss(inp=dists, center=o, width=width, clip=clip) for o in grid_points

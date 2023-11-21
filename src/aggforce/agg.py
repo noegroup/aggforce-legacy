@@ -247,4 +247,4 @@ def force_smoothness(array):
     is often used as a metric of quality for force-maps.
     """
 
-    return np.mean(array**2)
+    return np.mean(array ** 2)
