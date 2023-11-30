@@ -1,33 +1,48 @@
-r"""Provides routines for finding the optimal linear force aggregation map from a
-given molecular trajectory.
-"""
+r"""Provides routines for the optimal linear force maps."""
 
+from typing import Union, Dict
+from typing_extensions import TypedDict
+from itertools import product
 import copy
 import numpy as np
-from qpsolvers import solve_qp
+from qpsolvers import solve_qp  # type: ignore [import-untyped]
 from .map import LinearMap
+from .constfinder import Constraints
+
+SolverOptions = TypedDict(
+    "SolverOptions",
+    {
+        "solver": str,
+        "eps_abs": float,
+        "max_iter": int,
+        "polish": bool,
+        "polish_refine_iter": int,
+    },
+)
+DEFAULT_SOLVER_OPTIONS: SolverOptions = {
+    "solver": "osqp",
+    "eps_abs": 1e-7,
+    "max_iter": int(1e3),
+    "polish": True,
+    "polish_refine_iter": 10,
+}
 
 
 def qp_linear_map(
-    forces,
-    config_mapping,
-    constraints=None,
-    l2_regularization=0.0,
-    xyz=None,
-    solver_args=dict(
-        solver="osqp",
-        eps_abs=1e-7,
-        max_iter=int(1e3),
-        polish=True,
-        polish_refine_iter=10,
-    ),
-):
-    r"""Searches for the linear force map which produces the average lowest mean
-    square norm of the mapped force.
+    forces: np.ndarray,
+    config_mapping: LinearMap,
+    constraints: Union[None, Constraints] = None,
+    l2_regularization: float = 0.0,
+    xyz: Union[np.ndarray, None] = None,  # noqa: ARG001
+    solver_args: SolverOptions = DEFAULT_SOLVER_OPTIONS,
+) -> LinearMap:
+    r"""Search for optimal linear force map.
+
+    Optimally is determined via  average lowest mean square norm of the mapped force.
 
     Note: Uses a quadratic programming solver with equality constraints.
 
-    Arguments
+    Arguments:
     ---------
     forces (np.ndarray):
         three dimensional array of shape (n_steps,n_sites,n_dims). Contains the
@@ -45,11 +60,12 @@ def qp_linear_map(
     solver_args (dict):
         Passed as options to qp_solve to solve quadratic program.
 
-    Returns
+    Returns:
     -------
     LinearMap object characterizing force mapping.
     """
-
+    if constraints is None:
+        constraints = set()
     # flatten force array
     reshaped_fs = qp_form(forces)
     # construct geom constraint matrix
@@ -75,8 +91,8 @@ def qp_linear_map(
     return LinearMap(np.stack(per_site_maps))
 
 
-def qp_form(target):
-    r"""Transforms a 3 array (target) to a particular form of 2-array.
+def qp_form(target: np.ndarray) -> np.ndarray:
+    r"""Transform 3-array to a particular form of 2-array.
 
     e.g. target is (n_steps,n_sites,n_dims=3)
     output is (n_steps*n_dims,n_sites) where the rows are ordered as
@@ -85,15 +101,16 @@ def qp_form(target):
         step=0, dim=2
         step=1, dim=0
     """
-
     mixed = np.swapaxes(target, 1, 2)
     reshaped = np.reshape(mixed, (mixed.shape[0] * mixed.shape[1], -1))
     return reshaped
 
 
-def make_bond_constraint_matrix(n_sites, constraints):
-    r"""Makes a molecular constraint matrix connective a generalized mapping
-    coefficient to the expanded mapping coefficient.
+def make_bond_constraint_matrix(n_sites: int, constraints: Constraints) -> np.ndarray:
+    r"""Make constraint matrix connecting a generalized maps to the expanded maps.
+
+    This matrix connects a generalized mapping coefficient to the expanded
+    mapping coefficient.
 
     When creating optimal force maps, atoms which are molecularly constrained to
     each other are most easily handled by having them share mapping
@@ -114,7 +131,7 @@ def make_bond_constraint_matrix(n_sites, constraints):
     the vector [a b b c d], i.e., sites 1 and 2 are constrained to have the
     same value.
 
-    Arguments
+    Arguments:
     ---------
     n_sites (integer):
         Total number of sites in the system. In the context of the quadratic
@@ -125,7 +142,7 @@ def make_bond_constraint_matrix(n_sites, constraints):
         constrained relative to each other (and should have identical mapping
         coefficients)
 
-    Returns
+    Returns:
     -------
     2-dim numpy.ndarray
     """
@@ -150,9 +167,11 @@ def make_bond_constraint_matrix(n_sites, constraints):
     return mat
 
 
-def reduce_constraint_sets(constraints):
-    r"""Reduces a set of sets of constrained sites into a set of larger disjoint
-    sets of constrained sites.
+def reduce_constraint_sets(constraints: Constraints) -> Constraints:
+    r"""Reduces constraints to disjoint constraints.
+
+    Reduces a set of frozensets of constrained sites into a set of larger disjoint
+    frozensets of constrained sites.
 
     If a single atom has a constrained bonds to two separate atoms, the list of
     bond constraints does not make it clear that all three of these atoms are
@@ -161,17 +180,18 @@ def reduce_constraint_sets(constraints):
     constraint entry, but does so for all atoms and all sized constrains such
     that the returned list of constraint's members are all disjoint.
 
-    Arguments
+    Arguments:
     ---------
     constraints (set of frozensets of integers):
         Each member set contains indices of atoms which are constrained relative
         to each other
 
-    Returns
+    Returns:
     -------
     set of frozensets of integers.
 
     Example:
+    -------
         {{1,2},{2,3},{4,5}}
         is transformed into
         {{1,2,3},{4,5}}
@@ -184,7 +204,6 @@ def reduce_constraint_sets(constraints):
     seems to be a form of flood search using breadth first search should be
     revised.
     """
-
     constraints_copy = copy.copy(constraints)
     agged_constraints = set()
 
@@ -202,18 +221,18 @@ def reduce_constraint_sets(constraints):
     # begin again. The new set is returned when we run out of elements in
     # constraints copy to process.
 
-    new = set(constraints_copy.pop())
+    new = frozenset(constraints_copy.pop())
     second_try = False
     while True:
         to_add = [x for x in constraints_copy if new.intersection(x)]
         new = new.union(*to_add)
         constraints_copy.difference_update(to_add)
         if not to_add:
-            agged_constraints.add(frozenset(new))
+            agged_constraints.add(new)
             if second_try:
                 second_try = False
                 try:
-                    new = constraints_copy.pop()
+                    new = frozenset(constraints_copy.pop())
                 except KeyError:
                     break
             else:
@@ -221,30 +240,37 @@ def reduce_constraint_sets(constraints):
     return agged_constraints
 
 
-def constraint_lookup_dict(constraints):
-    r"""Transforms a set of frozensets of constraints to a dictionary connecting
+def constraint_lookup_dict(constraints: Constraints) -> Dict[int, int]:
+    r"""Transform constraints to a dictionary connecting each member to a parent.
+
+    Transforms a set of frozensets of constraints to a dictionary connecting
     each set member to a master member.
 
     The smallest member of each member set is designated as the parent member.
     Each remaining element in that set is added to the return dictionary as a
     key which points to its parent member.
 
+    Arguments:
+    ---------
+    constraints:
+        Constraints to collapse
+
     Example:
-        constraints = {{1,2,3},{4,5},{6,7}}
-        is transformed into the following dictionary:
-        {
-            3:1
-            2:1
-            5:4
-            7:6
-        }
-        In other words, 1 is the parent member of the first member set, so 2 and
-        3 point to 1, etc.
+    -------
+    constraints = {{1,2,3},{4,5},{6,7}}
+    is transformed into the following dictionary:
+    {
+        3:1
+        2:1
+        5:4
+        7:6
+    }
+    In other words, 1 is the parent member of the first member set, so 2 and
+    3 point to 1, etc.
 
     This is useful when setting up matrices for the quadratic programming
     problem when molecular constraint are present.
     """
-
     mapping = {}
     for group in constraints:
         sites = sorted(group)
@@ -254,12 +280,12 @@ def constraint_lookup_dict(constraints):
 
 
 def constraint_aware_uni_map(
-    config_mapping,
-    constraints=None,
-    xyz=None,
-    forces=None,
-):
-    r"""Produces a uniform basic force map compatible with constraints.
+    config_mapping: LinearMap,
+    constraints: Union[None, Constraints] = None,
+    xyz: Union[None, np.ndarray] = None,  # noqa: ARG001
+    forces: Union[None, np.ndarray] = None,  # noqa: ARG001
+) -> LinearMap:
+    r"""Produce a uniform basic force map compatible with constraints.
 
     The given configurational map associates various fine-grained (fg) sites with
     each coarse grained (cg) site. This creates a force-map which:
@@ -276,7 +302,7 @@ def constraint_aware_uni_map(
 
     NOTE: The configurational map is not checked for any kind of correctness.
 
-    Arguments
+    Arguments:
     ---------
     config_mapping (linearmap.LinearMap):
         LinearMap object characterizing the configurational map characterizing
@@ -289,17 +315,19 @@ def constraint_aware_uni_map(
     forces:
         Ignored. Included for compatibility with other mapping methods.
 
-    Returns
+    Returns:
     -------
     LinearMap object describing a force-mapping.
     """
-
+    if constraints is None:
+        constraints = set()
     # get which sites have nonzero contributions to each cg site
     cg_sets = [set(np.nonzero(row)[0]) for row in config_mapping.standard_matrix]
     constraints = reduce_constraint_sets(constraints)
     # add atoms which are related by constraint to those already in cg sites
-    for group in cg_sets:
-        _ = [group.update(x) for x in constraints if group.intersection(x)]
+    for group, x in product(cg_sets, constraints):
+        if group.intersection(x):
+            group.update(x)
     force_map_mat = np.zeros_like(config_mapping.standard_matrix)
     # place a 1 where all original or those pulled in by constraints are
     for cg_index, cg_contents in enumerate(cg_sets):

@@ -1,15 +1,19 @@
-r"""Provides objects describing maps transforming fine-grained points to
-coarse-grained points. Points may be positions or forces.
+r"""Provides objects describing molecular maps.
+
+These maps transform fine-grained points to coarse-grained points. Points may be
+positions or forces.
 """
 
 from abc import ABC, abstractmethod
 from itertools import combinations, product
 import numpy as np
+from typing import Union, Dict, List, Iterable, Callable, Final
 
 
 class Map(ABC):
-    r"""Provides a abstact interface for maps for transforming
-    fine-grained to coarse-grained systems.
+    r"""Provides a abstract interface for maps.
+
+    Maps transform fine-grained to coarse-grained systems.
 
     This is an abstract class. You must instantiate a subclass to use it. It
     mostly useful to remind what content can be assumed to be present for a
@@ -19,12 +23,13 @@ class Map(ABC):
     dimensions (and not flat vectors).
     """
 
-    n_dim = 3
+    n_dim: Final = 3
 
     @abstractmethod
-    def __init__(self, tags):
-        """
-        Arguments
+    def __init__(self, tags: Union[None, Dict[str, str]]) -> None:
+        """Initialize map.
+
+        Arguments:
         ---------
         tags (dict):
             Used to create self.tags, which is a dictionary that than be
@@ -39,41 +44,38 @@ class Map(ABC):
 
     @property
     @abstractmethod
-    def n_cg_sites(self):
-        r"""The number of coarse-grained sites present in the output of the
-        map.
-        """
+    def n_cg_sites(self) -> int:
+        r"""Number of coarse-grained sites in output of map."""
 
     @property
     @abstractmethod
-    def n_fg_sites(self):
-        r"""The number of fine-grained sites expected in the input to the
-        map.
-        """
+    def n_fg_sites(self) -> int:
+        r"""Number of fine-grained sites in input to map."""
 
     @abstractmethod
-    def __call__(self, points, copoints):
-        r"""Applies map to a particular form of 3-dim array.
+    def __call__(
+        self, points: np.ndarray, copoints: Union[np.ndarray, None]
+    ) -> np.ndarray:
+        r"""Apply map to 3-dim array.
 
-        Arguments
+        Arguments:
         ---------
         points (np.ndarray):
             Assumed to be 3 dimensional of shape (n_steps,n_sites,n_dims).
-        copoints (np.ndarray):
+        copoints (np.ndarray or None):
             Assumed to be 3 dimensional of shape (n_steps,n_sites,n_dims).
             Some mapping methods require an additional set of points. For
             example, positions must sometimes be given in order to apply a
             position-dependent force map.
 
-        Returns
+        Returns:
         -------
         Mapped version of points as a three dimensional nd.numpy array.
         """
 
 
 class LinearMap(Map):
-    r"""Provides a unified interface for linear maps for transforming from
-    fine-grained to coarse-grained systems.
+    r"""Unified interface for linear maps.
 
     Allows multiple different representations of the same map to be used.
     Various representations are converted into a consistent internal
@@ -90,10 +92,15 @@ class LinearMap(Map):
     (n_steps,n_sites,n_dims).
     """
 
-    def __init__(self, mapping, n_fg_sites=None, tags=None):
-        r"""Initializes a LinearMapping object from something describing a map.
+    def __init__(
+        self,
+        mapping: Union[List[List[int]], np.ndarray],
+        n_fg_sites: Union[int, None] = None,
+        tags: Union[None, Dict[str, str]] = None,
+    ) -> None:
+        r"""Initialize LinearMapping from something describing a map.
 
-        Arguments
+        Arguments:
         ---------
         mapping (list of lists of integers or 2-d numpy.ndarray):
             If a list of lists, then we assume the outer list iterates over
@@ -112,6 +119,7 @@ class LinearMap(Map):
             Passed to Map init.
 
         Example:
+        -------
             [[0,2,3],[4]] with n_fg_sites=6 describes a 6 particle fg system
             and 2 particle cg system (from the length of the outer list).
             cg particle 0 (equally) depends on fg particles 0,2, and 3 as where
@@ -124,7 +132,6 @@ class LinearMap(Map):
             the weights directly, as where in the list format it was done
             automatically.
         """
-
         super().__init__(tags)
 
         if isinstance(mapping, np.ndarray) and len(mapping.shape) == 2:
@@ -147,53 +154,50 @@ class LinearMap(Map):
             raise ValueError()
 
     @property
-    def standard_matrix(self):
+    def standard_matrix(self) -> np.ndarray:
         r"""The mapping in standard matrix format."""
-
         return self._standard_matrix
 
     @property
-    def n_cg_sites(self):
-        r"""The number of coarse-grained sites described by the output of the
-        map.
-        """
-
+    def n_cg_sites(self) -> int:
+        r"""Number of coarse-grained sites in output of map."""
         return self._standard_matrix.shape[0]
 
     @property
-    def n_fg_sites(self):
-        r"""The number of fine-grained sites described by the input of the
-        map.
-        """
-
+    def n_fg_sites(self) -> int:
+        r"""Number of fine-grained sites in input of map."""
         return self._standard_matrix.shape[1]
 
     @property
-    def participating_fg(self):
-        r"""A table of which atoms are included in the definition of each cg
-        site. Formatted as a dictionary of {cg_index:<list_of_fg_indices>}.
-        """
+    def participating_fg(self) -> List[List[int]]:
+        r"""Table of atoms included in cg site.
 
+        Formatted as a dictionary of {cg_index:<list_of_fg_indices>}.
+        """
         inc_matrix = self.standard_matrix > 0
         ind_form = list(zip(*np.nonzero(inc_matrix)))
-        table = []
-        for cg_ind in range(self.n_cg_sites):
+        table: List[List[int]] = []
+        for _ in range(self.n_cg_sites):
             table.append([])
         for cg_ind, fg_ind in ind_form:
             table[cg_ind].append(fg_ind)
         return table
 
-    def __call__(self, points, copoints=None):
-        r"""Applies map to a particular form of 3-dim array.
+    def __call__(
+        self,
+        points: np.ndarray,
+        copoints: Union[np.ndarray, None] = None,  # noqa: ARG002
+    ) -> np.ndarray:
+        r"""Apply map to a particular form of 3-dim array.
 
-        Arguments
+        Arguments:
         ---------
         points (np.ndarray):
             Assumed to be 3 dimensional of shape (n_steps,n_sites,n_dims).
         copoints:
             Ignored. Included for compatibility with parent class.
 
-        Returns
+        Returns:
         -------
         Combines points along the n_sites dimension according to the internal
         map.
@@ -202,8 +206,7 @@ class LinearMap(Map):
 
 
 class CLAMap(Map):
-    r"""Provides a representation of a Co-Local Affine map with a particular
-    structure.
+    r"""Provide representation of a Co-Local Affine map.
 
     An affine transformation on x is Ax+b (a translation and linear
     transformation). Consider two time series, x_i and y_i. Consider mapping x_i
@@ -226,11 +229,17 @@ class CLAMap(Map):
     """
 
     def __init__(
-        self, scale, trans, n_fg_sites, n_cg_sites=None, zeroes_check=True, tags=None
-    ):
-        r"""Initializes a CLAMap object from functions scale (A) and trans (b).
+        self,
+        scale: Callable,
+        trans: Callable,
+        n_fg_sites: int,
+        n_cg_sites: Union[None, int] = None,
+        zeroes_check: bool = True,
+        tags: Union[Dict, None] = None,
+    ) -> None:
+        r"""Initialize CLAMap object from functions scale (A) and trans (b).
 
-        Arguments
+        Arguments:
         ---------
         scale (callable):
             Callable which accepts an array of shape (n_steps,n_fg_sites,n_dim)
@@ -254,11 +263,7 @@ class CLAMap(Map):
         tags (dictionary or None):
             Passed to Map init.
         """
-
         super().__init__(tags)
-
-        if n_cg_sites is None and not zeroes_check:
-            raise ValueError("If n_cg_sites is not set, zeroes_check must be truthy.")
 
         if zeroes_check:
             z_points = np.zeros((1, n_fg_sites, Map.n_dim))
@@ -268,6 +273,11 @@ class CLAMap(Map):
             else:
                 if n_cg_sites != mapped.shape[1]:
                     raise ValueError("n_cg_sites did not match results from zero test")
+        else:
+            if n_cg_sites is None:
+                raise ValueError(
+                    "If n_cg_sites is not set, zeroes_check must be truthy."
+                )
 
         self._n_cg_sites = n_cg_sites
         self._n_fg_sites = n_fg_sites
@@ -275,25 +285,21 @@ class CLAMap(Map):
         self.trans = trans
 
     @property
-    def n_cg_sites(self):
-        r"""The number of coarse-grained sites described by the output of the
-        map.
-        """
-
+    def n_cg_sites(self) -> int:
+        r"""Number of coarse-grained sites in map output."""
         return self._n_cg_sites
 
     @property
-    def n_fg_sites(self):
-        r"""The number of fine-grained sites described by the input of the
-        map.
-        """
-
+    def n_fg_sites(self) -> int:
+        r"""Number of fine-grained sites in map input."""
         return self._n_fg_sites
 
-    def __call__(self, points, copoints):
-        r"""Applies map to a particular form of 3-dim array.
+    def __call__(
+        self, points: np.ndarray, copoints: Union[None, np.ndarray]
+    ) -> np.ndarray:
+        r"""Apply map to 3-dim array.
 
-        Arguments
+        Arguments:
         ---------
         points (np.ndarray):
             Assumed to be 3 dimensional of shape (n_steps,n_sites,n_dims).
@@ -301,21 +307,35 @@ class CLAMap(Map):
             Provided as input to A and b during mapping. Assume dot be of form
             (n_steps,n_sites,n_dims). See class description.
 
-        Returns
+        Returns:
         -------
         Combines points along the n_sites dimension according to the internal
         map functions.
         """
-
         scale = self.scale(copoints)
         trans = self.trans(copoints)
         return trjdot(points, scale) + trans
 
 
-def trjdot(points, factor):
-    """Performs a specific matrix product when dealing with mdtraj-style arrays
-    and a matrix.
+def trjdot(points: np.ndarray, factor: np.ndarray) -> np.ndarray:
+    """Perform a matrix product with mdtraj-style arrays.
 
+    Arguments:
+    ---------
+    points (numpy.ndarray):
+        3-dim ndarray of shape (n_steps,n_sites,n_dims). To be mapped using
+        factor.
+    factor (numpy.ndarray):
+        2-dim ndarray of shape (n_cg_sites,n_sites) or 3-dim ndarray of shape
+        (n_steps,n_cg_sites,n_sites). Used to map points.
+
+    Returns:
+    -------
+    ndarray of shape (n_steps,n_cg_sites,n_dims) contained points mapped
+    with factor.
+
+    Notes:
+    -----
     Functionality is most easily described via an example:
         Molecular positions (and forces) are often represented as arrays of
         shape (n_steps,n_sites,n_dims). Other places in the code we often
@@ -336,22 +356,7 @@ def trjdot(points, factor):
         trajectory, this can be specified by providing a factor of shape
         (n_steps,n_cg_sites,n_sites). This situation is determined by
         considering the dimension of factor.
-
-    Arguments
-    ---------
-    points (numpy.ndarray)
-        3-dim ndarray of shape (n_steps,n_sites,n_dims). To be mapped using
-        factor.
-    factor (numpy.ndarray)
-        2-dim ndarray of shape (n_cg_sites,n_sites) or 3-dim ndarray of shape
-        (n_steps,n_cg_sites,n_sites). Used to map points.
-
-    Returns
-    -------
-    ndarray of shape (n_steps,n_cg_sites,n_dims) contained points mapped
-    with factor.
     """
-
     # optimal path found from external optimization with einsum_path
     opt_path = ["einsum_path", (0, 1)]
     if len(factor.shape) == 2:
@@ -361,12 +366,14 @@ def trjdot(points, factor):
     raise ValueError("Factor matrix is an incompatible shape.")
 
 
-def smear_map(site_groups, n_sites, return_mapping_matrix=False):
-    """Makes a LinearMap which replaces the positions of groups of atoms with
-    their mean. This map does _not_ reduce the dimensionality of a system;
-    instead, every modified position is replaced with the corresponding mean.
+def smear_map(
+    site_groups: Iterable[Iterable[int]],
+    n_sites: int,
+    return_mapping_matrix: bool = False,
+) -> Union[LinearMap, np.ndarray]:
+    """LinearMap which replaces the groups of atoms with their mean.
 
-    Arguments
+    Arguments:
     ---------
     site_groups (list of iterables of integers):
         List of iterables, each member of which describes a group of sites
@@ -376,11 +383,15 @@ def smear_map(site_groups, n_sites, return_mapping_matrix=False):
     return_mapping_matrix (boolean):
         If true, instead of a LinearMap, the mapping matrix itself is returned.
 
-    Returns
+    Returns:
     -------
     LinearMap instance or 2-dimensional numpy.ndarray
-    """
 
+    Notes:
+    -----
+    This map does _not_ reduce the dimensionality of a system;
+    instead, every modified position is replaced with the corresponding mean.
+    """
     site_sets = [set(x) for x in site_groups]
 
     for pair in combinations(site_sets, 2):

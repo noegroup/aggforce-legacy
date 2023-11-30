@@ -1,6 +1,7 @@
-r"""Provides methods for validation and summarizing maps. We focus on calculate
-the projection of forces along basis functions and the difference in force
-residuals between pairs of force-fields.
+r"""Methods for validation and summarizing maps.
+
+We focus on calculate the projection of forces along basis functions and the difference
+in force residuals between pairs of force-fields.
 
 This module requires JAX.
 
@@ -15,27 +16,29 @@ Rudzinski, Joseph F., and W. G. Noid. "Coarse-graining entropy, forces, and
 structures." The Journal of chemical physics 135.21 (2011): 214101.
 """
 
+from typing import TypeVar, Union, Callable, Iterable, overload, Literal, List
 import numpy as np
 import numpy.random as r
 import jax
 from .agg import force_smoothness
 from .jaxfeat import distances, clipped_gauss
 
+ArrayT = TypeVar("ArrayT", bound=Union[jax.Array, np.ndarray])
+
 
 def random_uniform_forces(
-    positions,
-    scale=1.0,
-    randg=None,
-):
-    r"""Returns the forces of a random linear (ramp) force-field applied to each
-    frame in a trajectory.
+    positions: np.ndarray,
+    scale: float = 1.0,
+    randg: Union[r.Generator, None] = None,
+) -> np.ndarray:
+    r"""Obtain forces of a random linear force-field applied to a trajectory.
 
     This function evaluates a linear force-field which assigns a single unique
     3-vector to each site at each frame. That is, all sites in all frames have
     the same force (same direction and magnitude). This force has magnitude
     scale and points in a shared random direction, which is set using randg.
 
-    Arguments
+    Arguments:
     ---------
     positions (array, jnp.DeviceArray or np.ndarray):
         3-d array containing positions as a function of time. Assumed to be of
@@ -46,12 +49,11 @@ def random_uniform_forces(
         random number generator used to define the force direction. To make the
         direction deterministic, supply a Generator instance with a fixed seed.
 
-    Returns
+    Returns:
     -------
     3-dimensional nd.ndaray containing the forces for each frame in positions.
     Has shape (n_frames,n_sites,n_dims).
     """
-
     if randg is None:
         randg = r.default_rng()
     shape = positions.shape
@@ -73,8 +75,17 @@ def random_uniform_forces(
     return tiled_force
 
 
-def rsqpg_forces(positions, inner, outer, width, randg=None, sq_args=True):
-    r"""Calculates the forces of a random Gaussian force-field for each frame in
+def rsqpg_forces(
+    positions: Union[jax.Array, np.ndarray],
+    inner: float,
+    outer: float,
+    width: float,
+    randg: Union[r.Generator, None] = None,
+    sq_args: bool = True,
+) -> jax.Array:
+    r"""Calculate the forces of a random force-field.
+
+    Estimates the forces of a random Gaussian force-field for each frame in
     a trajectory.
 
     randg is used to generate a random number in between inner and outer; this
@@ -84,7 +95,7 @@ def rsqpg_forces(positions, inner, outer, width, randg=None, sq_args=True):
     with respect to positions (and multiplied by -1) to provide forces for each
     frame.
 
-    Arguments
+    Arguments:
     ---------
     positions (array, jnp.DeviceArray or np.ndarray):
         3-d array containing positions as a function of time. Assumed to be of
@@ -102,12 +113,11 @@ def rsqpg_forces(positions, inner, outer, width, randg=None, sq_args=True):
     sq_args (boolean):
         If truthy, inner, outer, and width are squared before they are used.
 
-    Returns
+    Returns:
     -------
     3-dimensional jnp.DeviceArray containing the forces for each frame in
     positions. Has shape (n_frames,n_sites,n_dims).
     """
-
     if sq_args:
         outer = outer**2
         inner = inner**2
@@ -119,16 +129,44 @@ def rsqpg_forces(positions, inner, outer, width, randg=None, sq_args=True):
     return sq_gaussian_forces(positions, offset, width)
 
 
+@overload
 def random_residual_shift(
-    coords,
-    forces,
-    n_samples=1000,
-    randg=None,
-    method=rsqpg_forces,
-    average=False,
+    coords: np.ndarray,
+    forces: np.ndarray,
+    n_samples: int,
+    randg: Union[r.Generator, None],
+    method: Callable[..., jax.Array],  # see docstring
+    average: Literal[True],
     **kwargs
-):
-    r"""Calculates the force residual (i.e. force_smoothness) difference between a
+) -> float:
+    ...
+
+
+@overload
+def random_residual_shift(
+    coords: np.ndarray,
+    forces: np.ndarray,
+    n_samples: int,
+    randg: Union[r.Generator, None],
+    method: Callable[..., jax.Array],  # see docstring
+    average: Literal[False],
+    **kwargs
+) -> List[float]:
+    ...
+
+
+def random_residual_shift(
+    coords: np.ndarray,
+    forces: np.ndarray,
+    n_samples: int = 1000,
+    randg: Union[r.Generator, None] = None,
+    method: Callable[..., jax.Array] = rsqpg_forces,  # see docstring
+    average: bool = False,
+    **kwargs
+) -> Union[float, List[float]]:
+    r"""Estimate the force roughness of generated force-fields.
+
+    Calculates the force residual (i.e. force_smoothness) difference between a
     series of randomly generated force-fields and a flat force-field.
 
     This procedure is based on the following property:
@@ -152,7 +190,7 @@ def random_residual_shift(
     from them. The reference is the force residual of a constant-everywhere
     force-field (which as a force of zero everywhere).
 
-    Arguments
+    Arguments:
     ---------
     coords (np.ndarray):
         3-array that has the positions of the system as a function of time.
@@ -176,16 +214,15 @@ def random_residual_shift(
     average (boolean):
         whether to average the shifts or return a list of all of the
         shifts.
-    kwargs:
-        passed to method at each iteration via **.
+    **kwargs:
+        passed to method at each iteration.
 
-    Returns
+    Returns:
     -------
-    if sum is truthy, returns a scalar (often as a JAX 0-array depending out the
+    if average is truthy, returns a scalar (often as a JAX 0-array depending out the
     particular method used); else, a list of such scalars with an entry for each
     randomly generated force-field.
     """
-
     if randg is None:
         randg = r.default_rng()
     vals = []
@@ -199,21 +236,47 @@ def random_residual_shift(
         return [x - fs for x in vals]
 
 
+@overload
 def random_force_proj(
-    coords,
-    forces,
-    n_samples=1000,
-    randg=None,
-    method=rsqpg_forces,
-    average=True,
+    coords: np.ndarray,
+    forces: np.ndarray,
+    n_samples: int,
+    randg: Union[r.Generator, None],
+    method: Callable[..., jax.Array],
+    average: Literal[True],
     **kwargs
-):
-    r"""Performs mscg_ip projections for a randomly generated set of bases.
+) -> float:
+    ...
+
+
+@overload
+def random_force_proj(
+    coords: np.ndarray,
+    forces: np.ndarray,
+    n_samples: int,
+    randg: Union[r.Generator, None],
+    method: Callable[..., jax.Array],
+    average: Literal[False],
+    **kwargs
+) -> Iterable[float]:
+    ...
+
+
+def random_force_proj(
+    coords: np.ndarray,
+    forces: np.ndarray,
+    n_samples: int = 1000,
+    randg: Union[r.Generator, None] = None,
+    method: Callable[..., jax.Array] = rsqpg_forces,
+    average: bool = True,
+    **kwargs
+) -> Union[float, Iterable[float]]:
+    r"""Perform MSCG projections on random basis functions.
 
     Generates n_samples different basis functions and projects forces on them.
     See mscg_ip for more details.
 
-    Arguments
+    Arguments:
     ---------
     coords (np.ndarray):
         3-array that has the positions of the system as a function of time.
@@ -226,7 +289,7 @@ def random_force_proj(
         this is the length of the output.
     randg (None or r.Generator instance):
         random number generator used to define the basis functions. To make the
-        selection of basis functios deterministic, supply a Generator instance
+        selection of basis functions deterministic, supply a Generator instance
         with a fixed seed.
     method (callable):
         Callable used to generate the random basis functions. coords, randg and
@@ -238,12 +301,11 @@ def random_force_proj(
     kwargs:
         passed to method at each iteration via **.
 
-    Returns
+    Returns:
     -------
-    if sum is truthy, returns a scalar (often as a JAX 0-array depending out the
+    if average is truthy, returns a scalar (often as a JAX 0-array depending out the
     particular method used); else, a list of such scalars.
     """
-
     if randg is None:
         randg = r.default_rng()
     vals = []
@@ -256,8 +318,8 @@ def random_force_proj(
         return vals
 
 
-def mscg_ip(forces, funcs):
-    r"""Performs a MSCG-like inner product.
+def mscg_ip(forces: ArrayT, funcs: ArrayT) -> float:
+    r"""Perform a MSCG-like inner product.
 
     This function does an element-wise product of forces and funcs, sums over all
     dims, and then divides by the size of the first (0th) dimension.
@@ -278,7 +340,7 @@ def mscg_ip(forces, funcs):
     function is still defined for general arrays, but does not correspond to the
     same type of sample-based approximation to the content described above.
 
-    Arguments
+    Arguments:
     ---------
     forces (3-array):
         3-array (jax or numpy) containing the forces associated each timestep of
@@ -288,28 +350,28 @@ def mscg_ip(forces, funcs):
         shape (n_steps,n_sites,n_dims).  NOTE: This is _not_ a callable. It is
         an array representing the output of a suitable function.
 
-    Returns
+    Returns:
     -------
     Returns a 0-dim array containing the value of the inner product. The exact
     type depends on the input types.
     """
-
     n_steps = forces.shape[0]
-    return (funcs * forces).sum() / n_steps
+    return float((funcs * forces).sum() / n_steps)
 
 
 # note that JAX peculiarities make a gaussian energy function that is a function
 # of distances and not square distances return forces that are nans.
 @jax.jit
-def sq_gaussian_energies(positions, offset, width):
-    r"""Calculates the per-frame energies of a positions array with a shared
-    Gaussian potential.
+def sq_gaussian_energies(
+    positions: jax.Array, offset: float, width: float
+) -> jax.Array:
+    r"""Calculate per-frame energies of positions with Gaussian potential.
 
     A single Gaussian (with properties set by offset and width) is applied to
     each pairwise distance in each frame. This is then summed over each frame to
     produce the trajectory of energies.
 
-    Arguments
+    Arguments:
     ---------
     positions (jnp.DeviceArray):
         3-array with shape (n_frames, n_sites, n_dims) that contains the
@@ -319,11 +381,10 @@ def sq_gaussian_energies(positions, offset, width):
     width (float):
         sets the Gaussian width through clipped_gauss
 
-    Returns
+    Returns:
     -------
     1-dimensional jnp.DeviceArray containing the energy of each frame.
     """
-
     distance_arr = distances(positions, return_matrix=True, square=True)
     return clipped_gauss(distance_arr, center=offset, width=width, clip=None).sum(
         axis=[1, 2]

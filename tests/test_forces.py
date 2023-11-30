@@ -1,6 +1,7 @@
-r"""This module pytests various force aggregation schemes using a short portion
-of at chignolin (CLN025) trajectory. Some of the tests in this module require
-JAX to be installed. They are marked via pytest decorators.
+r"""Tests force aggregation schemes using a chignolin (CLN025) trajectory.
+
+Some of the tests in this module require JAX to be installed. They are marked via pytest
+decorators.  
 
 We do not have a ground truth for validating these results. The tests in this
 module instead use either previously generated values (e.g., checking the map
@@ -15,7 +16,7 @@ serve as sanity checks for force generation methods, and should not be regarded
 as proof that a force aggregation method is correct.
 
 Additionally, note that the provided trajectory data is not close to converged,
-which may lead to additional in results.
+which may lead to additional bias.
 
 In practice, the tests seem to be able to detect if molecular constraints are not
 obeyed, but cannot detect if a wrong temperature is specified for featurized
@@ -34,11 +35,12 @@ Rudzinski, Joseph F., and W. G. Noid. "Coarse-graining entropy, forces, and
 structures." The Journal of chemical physics 135.21 (2011): 214101.
 """
 
-import os
+from typing import Tuple, Final
+from pathlib import Path
 import re
 import numpy as np
 import numpy.random as r
-import mdtraj as md
+import mdtraj as md  # type: ignore [import-untyped]
 import pytest
 from aggforce import agg as ag
 from aggforce import linearmap as lm
@@ -47,13 +49,14 @@ from aggforce import constfinder as cf
 
 # this seeds some portions of the randomness of these tests, but not be
 # complete.
-rseed = 42100
+rseed: Final = 42100
 
 
-def get_data():
-    r"""Function encapsulating obtaining data. This is currently grabs a numpy
-    trajectory file, extracts coordinates and forces, and then along with a
-    pdb-derived mdtraj trajectory and kbt value returns them.
+def get_data() -> Tuple[np.ndarray, np.ndarray, md.Trajectory, float]:
+    r"""Return data for tests.
+
+    This is currently grabs a numpy trajectory file, extracts coordinates and forces,
+    and then along with a pdb-derived mdtraj trajectory and kbt value returns them.
 
     Note that we must manually provide a value for KbT in appropriate units.
 
@@ -62,11 +65,11 @@ def get_data():
     A tuple of the following:
         coordinates array
             array of positions as a function of time (shape should be
-            (n_frames,n_sites,n_dims). Should correspond to the same frames
+            (n_frames,n_sites,n_dims)). Should correspond to the same frames
             as the forces array.
         forces array
             array of forces as a function of time (shape should be
-            (n_frames,n_sites,n_dims). Should correspond to the same frames
+            (n_frames,n_sites,n_dims)). Should correspond to the same frames
             as the coordinates array.
         mdtraj.Trajectory
             mdtraj trajectory corresponding to the sites in the coordinates and
@@ -76,32 +79,30 @@ def get_data():
             frame (it can be generated from a pdb).
         KbT (float)
             Boltzmann's constant times the temperature of the reference
-            trajectory
+            trajectory. See code for units.
     """
-
     # kbt for 350K in kcal/mol, known a priori for our trajectory files
     kbt = 0.6955215
-    trajfile = os.path.join(
-        os.path.dirname(__file__), "data/cln025_record_2_prod_97.npz"
-    )
+    location = Path(__file__).parent
+    trajfile = str(location / "data/cln025_record_2_prod_97.npz")
     data = np.load(trajfile)
     forces = data["Fs"]
     coords = data["coords"]
-    pdbfile = os.path.join(
-        os.path.dirname(__file__), "data/cln025.pdb"
-    )
+    pdbfile = str(location / "data/cln025.pdb")
     pdb = md.load(pdbfile)
     return (coords, forces, pdb, kbt)
 
 
-def gen_config_map(pdb, string, n_sites):
-    r"""Create the configurational map. This is needed as it defines constraints
-    which dictate which force maps are feasible.
+def gen_config_map(pdb: md.Trajectory, string: str = "CA$") -> lm.LinearMap:
+    r"""Create the configurational map.
+
+    This is needed as it defines constraints which dictate which force maps are
+    feasible.
 
     We here generate a (usually carbon alpha) configurational map using mdtraj's
     topology. The map could also be specified externally.
 
-    Arguments
+    Arguments:
     ---------
     pdb (mdtraj.Trajectory):
         Trajectory object describing the fine-grained (e.g. atomistic)
@@ -110,28 +111,29 @@ def gen_config_map(pdb, string, n_sites):
         Regex string which is compared against the str() of the topology.atoms
         entry--- if matched that atom is retained in the configurational map.
 
-    Returns
+    Returns:
     -------
     A LinearMap object which characterizes the configurational map. There are
     multiple ways to initialize this object; see the main code for more details.
     """
-
     inds = []
     atomlist = list(pdb.topology.atoms)
+    # record which atoms match the string via str casing, e.g., which are carbon alphas.
     for ind, a in enumerate(atomlist):
-        if re.search("CA$", str(a)):
+        if re.search(string, str(a)):
             inds.append([ind])
-    return lm.LinearMap(inds, n_fg_sites=n_sites)
+    return lm.LinearMap(inds, n_fg_sites=pdb.xyz.shape[1])
 
 
-def test_cln025_basic_agg_forces_against_ref():
-    r"""Tests to see if basic force aggregation produces a map which is the same as
+def test_cln025_basic_agg_forces_against_ref() -> None:
+    r"""Test CLN025 basic map formation.
+
+    Test if basic force aggregation produces a map which is the same as
     as a saved map previously generated using the same method.
     """
-
     coords, forces, pdb, kbt = get_data()
     # cmap is the configurational coarse-grained map
-    cmap = gen_config_map(pdb, "CA$", coords.shape[1])
+    cmap = gen_config_map(pdb, "CA$")
     # guess molecular constraints
     constraints = cf.guess_pairwise_constraints(coords[0:10], threshold=1e-3)
 
@@ -144,22 +146,21 @@ def test_cln025_basic_agg_forces_against_ref():
         method=lm.constraint_aware_uni_map,
     )
 
-    mapfile = os.path.join(
-        os.path.dirname(__file__), "data/cln_basic_force_mat.txt"
-    )
+    location = Path(__file__).parent
+    mapfile = str(location / "data/cln_basic_force_mat.txt")
     ref = np.loadtxt(mapfile)
     assert ((basic_results["map"].standard_matrix - ref) ** 2).sum() < 1e-5
 
 
-def test_cln025_opt_agg_forces_against_ref():
-    r"""Tests to see if configuration-independent optimized force aggregation
-    produces a map which the same as as a saved map previously made using the same
-    method.
-    """
+def test_cln025_opt_agg_forces_against_ref() -> None:
+    r"""Check optimized CLN025 linear force mapping.
 
+    Checks if configuration-independent optimized force aggregation produces a map which
+    the same as as a saved map previously made using the same method.
+    """
     coords, forces, pdb, kbt = get_data()
     # cmap is the configurational coarse-grained map
-    cmap = gen_config_map(pdb, "CA$", coords.shape[1])
+    cmap = gen_config_map(pdb, "CA$")
     # guess molecular constraints
     constraints = cf.guess_pairwise_constraints(coords[0:10], threshold=1e-3)
 
@@ -172,16 +173,17 @@ def test_cln025_opt_agg_forces_against_ref():
         l2_regularization=1,
     )
 
-    mapfile = os.path.join(
-        os.path.dirname(__file__), "data/cln_opt_force_mat.txt"
-    )
+    location = Path(__file__).parent
+    mapfile = str(location / "data/cln_opt_force_mat.txt")
     ref = np.loadtxt(mapfile)
     assert ((optim_results["map"].standard_matrix - ref) ** 2).mean() < 1e-3
 
 
 @pytest.mark.jax
-def test_cln025_opt_basic_rsqpg_mscg_ip(seed=rseed):
-    r"""Checks to see if the force projections along a random generated set of
+def test_cln025_opt_basic_rsqpg_mscg_ip(seed: int = rseed) -> None:
+    r"""Check if CLN025 basic and optimized forces consistent via projections.
+
+    Checks to see if the force projections along a random generated set of
     basis vectors approximately matches between a basic aggregating force map vs
     a configuration-independent optimized force map.
 
@@ -214,12 +216,11 @@ def test_cln025_opt_basic_rsqpg_mscg_ip(seed=rseed):
     This test requires JAX since our strategy for G uses JAX's
     autodifferentiation.
     """
-    
     from aggforce import jaxmapval as mv
 
     coords, forces, pdb, kbt = get_data()
     # cmap is the configurational coarse-grained map
-    cmap = gen_config_map(pdb, "CA$", coords.shape[1])
+    cmap = gen_config_map(pdb, "CA$")
     # guess molecular constraints
     constraints = cf.guess_pairwise_constraints(coords[0:10], threshold=1e-3)
 
@@ -250,21 +251,22 @@ def test_cln025_opt_basic_rsqpg_mscg_ip(seed=rseed):
 
     cg_coords = cmap(test_coords)
 
-    kwargs = dict(
-        coords=cg_coords,
-        n_samples=1000,
-        inner=6.0,
-        outer=12.0,
-        width=0.5,
-        average=False,
-    )
+    kwargs = {
+        "coords": cg_coords,
+        "n_samples": 1000,
+        "inner": 6.0,
+        "outer": 12.0,
+        "width": 0.5,
+        "average": False,
+    }
 
-    basic_proj = mv.random_force_proj(
+    # mypy gets angry at this kwargs usage, we suppress
+    basic_proj = mv.random_force_proj(  # type: ignore [call-overload]
         forces=basic_forces,
         randg=r.default_rng(seed=seed),
         **kwargs,
     )
-    optim_proj = mv.random_force_proj(
+    optim_proj = mv.random_force_proj(  # type: ignore [call-overload]
         forces=optim_forces,
         randg=r.default_rng(seed=seed),
         **kwargs,
@@ -283,10 +285,12 @@ def test_cln025_opt_basic_rsqpg_mscg_ip(seed=rseed):
 
 
 @pytest.mark.jax
-def test_cln025_opt_basic_rsqpg_offset(seed=rseed):
-    r"""Checks to see if the difference in force residual between two
-    force-fields is the same for a force map based on simple aggregation and
-    that created using configuration-independent optimized force.
+def test_cln025_opt_basic_rsqpg_offset(seed: int = rseed) -> None:
+    r"""Test if optimized and basic forces have similar residual differences.
+
+    Checks to see if the difference in force residual between two force-fields is the
+    same for a force map based on simple aggregation and that created using
+    configuration-independent optimized force.
 
     This is based on the following property. The configurational integral form
     of the force residual (here denoted R) evaluated for force-field G has a
@@ -317,12 +321,11 @@ def test_cln025_opt_basic_rsqpg_offset(seed=rseed):
     This test requires JAX since our strategy for G uses JAX's
     autodifferentiation.
     """
-
     from aggforce import jaxmapval as mv
 
     coords, forces, pdb, kbt = get_data()
     # cmap is the configurational coarse-grained map
-    cmap = gen_config_map(pdb, "CA$", coords.shape[1])
+    cmap = gen_config_map(pdb, "CA$")
     # guess molecular constraints
     constraints = cf.guess_pairwise_constraints(coords[0:10], threshold=1e-3)
 
@@ -353,21 +356,21 @@ def test_cln025_opt_basic_rsqpg_offset(seed=rseed):
 
     cg_coords = cmap(test_coords)
 
-    kwargs = dict(
-        coords=cg_coords,
-        n_samples=1000,
-        inner=6.0,
-        outer=12.0,
-        width=0.5,
-        average=False,
-    )
+    kwargs = {
+        "coords": cg_coords,
+        "n_samples": 1000,
+        "inner": 6.0,
+        "outer": 12.0,
+        "width": 0.5,
+        "average": False,
+    }
 
-    basic_proj = mv.random_residual_shift(
+    basic_proj = mv.random_residual_shift(  # type: ignore [call-overload]
         forces=basic_forces,
         randg=r.default_rng(seed=seed),
         **kwargs,
     )
-    optim_proj = mv.random_residual_shift(
+    optim_proj = mv.random_residual_shift(  # type: ignore [call-overload]
         forces=optim_forces,
         randg=r.default_rng(seed=seed),
         **kwargs,
@@ -384,10 +387,12 @@ def test_cln025_opt_basic_rsqpg_offset(seed=rseed):
 
 @pytest.mark.slow
 @pytest.mark.jax
-def test_cln025_featopt_opt_rsqpg_mscg_ip(seed=rseed):
-    r"""Checks to see if the force projections along a random generated set of
-    basis vectors approximately matches between a basic aggregating force map vs
-    a configuration-independent optimized force map.
+def test_cln025_featopt_opt_rsqpg_mscg_ip(seed: int = rseed) -> None:
+    r"""Check CLN025 optimized nonlinear and linear forces via projections.
+
+    Checks to see if the force projections along a random generated set of basis vectors
+    approximately matches between a basic aggregating force map vs a
+    configuration-independent optimized force map.
 
     See test_cln025_opt_basic_rsqpg_mscg_ip for more details. This is the same
     test, but is applied to the feature-optimized and configuration-independent
@@ -397,22 +402,23 @@ def test_cln025_featopt_opt_rsqpg_mscg_ip(seed=rseed):
     featurized map is quite basic as we do not test on enough data to see even a
     marginal gain in the force score.
     """
-
     from aggforce import jaxmapval as mv
     from aggforce import featlinearmap as p
     from aggforce import jaxfeat as jf
 
     coords, forces, pdb, kbt = get_data()
     # cmap is the configurational coarse-grained map
-    cmap = gen_config_map(pdb, "CA$", coords.shape[1])
+    cmap = gen_config_map(pdb, "CA$")
     # guess molecular constraints
     constraints = cf.guess_pairwise_constraints(coords[0:10], threshold=1e-3)
 
-    train_coords = coords[:500]
-    test_coords = coords[500:]
+    N_FRAMES: Final = 500
 
-    train_forces = forces[:500]
-    test_forces = forces[500:]
+    train_coords = coords[:N_FRAMES]
+    test_coords = coords[N_FRAMES:]
+
+    train_forces = forces[:N_FRAMES]
+    test_forces = forces[N_FRAMES:]
 
     basic_optim_results = ag.project_forces(
         xyz=train_coords,
@@ -421,7 +427,8 @@ def test_cln025_featopt_opt_rsqpg_mscg_ip(seed=rseed):
         constrained_inds=constraints,
         l2_regularization=1e3,
     )
-    f0 = p.Curry(
+
+    f0: p.Curry[p.GeneralizedFeatures] = p.Curry(
         jf.gb_feat,
         inner=0.0,
         outer=8.0,
@@ -429,7 +436,7 @@ def test_cln025_featopt_opt_rsqpg_mscg_ip(seed=rseed):
         n_basis=4,
         lazy=True,
     )
-    comb_f = p.Multifeaturize([p.id_feat, f0])
+    comb_f = p.Multifeaturize([p.id_feat, f0])  # type: ignore [list-item]
     optim_results = ag.project_forces(
         xyz=coords,
         forces=forces,
@@ -446,21 +453,22 @@ def test_cln025_featopt_opt_rsqpg_mscg_ip(seed=rseed):
     optim_forces = optim_results["map"](points=test_forces, copoints=test_coords)
     basic_forces = basic_optim_results["map"](points=test_forces, copoints=test_coords)
 
-    kwargs = dict(
-        coords=cg_coords,
-        n_samples=1000,
-        inner=6.0,
-        outer=12.0,
-        width=0.5,
-        average=False,
-    )
+    kwargs = {
+        "coords": cg_coords,
+        "n_samples": 1000,
+        "inner": 6.0,
+        "outer": 12.0,
+        "width": 0.5,
+        "average": False,
+    }
 
-    basic_optim_proj = mv.random_force_proj(
+    # the kwargs usage here is incompatible with mypy inference
+    basic_optim_proj = mv.random_force_proj(  # type: ignore [call-overload]
         forces=basic_forces,
         randg=r.default_rng(seed=seed),
         **kwargs,
     )
-    optim_proj = mv.random_force_proj(
+    optim_proj = mv.random_force_proj(  # type: ignore [call-overload]
         forces=optim_forces,
         randg=r.default_rng(seed=seed),
         **kwargs,
@@ -477,8 +485,10 @@ def test_cln025_featopt_opt_rsqpg_mscg_ip(seed=rseed):
 
 @pytest.mark.slow
 @pytest.mark.jax
-def test_cln025_featopt_opt_rsqpg_offset(seed=rseed):
-    r"""Checks to see if the difference in force residual between two
+def test_cln025_featopt_opt_rsqpg_offset(seed: int = rseed) -> None:
+    r"""Test if optimized linear and nonlinear forces have similar residual differences.
+
+    Checks to see if the difference in force residual between two
     force-fields is the same for a force map based on simple aggregation and
     that created using configuration-independent optimized force.
 
@@ -490,14 +500,13 @@ def test_cln025_featopt_opt_rsqpg_offset(seed=rseed):
     featurized map is quite basic as we do not test on enough data to see even a
     marginal gain in the force score.
     """
-
     from aggforce import jaxmapval as mv
     from aggforce import featlinearmap as p
     from aggforce import jaxfeat as jf
 
     coords, forces, pdb, kbt = get_data()
     # cmap is the configurational coarse-grained map
-    cmap = gen_config_map(pdb, "CA$", coords.shape[1])
+    cmap = gen_config_map(pdb, "CA$")
     # guess molecular constraints
     constraints = cf.guess_pairwise_constraints(coords[0:10], threshold=1e-3)
 
@@ -522,7 +531,7 @@ def test_cln025_featopt_opt_rsqpg_offset(seed=rseed):
         n_basis=4,
         lazy=True,
     )
-    comb_f = p.Multifeaturize([p.id_feat, f0])
+    comb_f = p.Multifeaturize([p.id_feat, f0])  # type: ignore [list-item]
     optim_results = ag.project_forces(
         xyz=coords,
         forces=forces,
@@ -541,21 +550,21 @@ def test_cln025_featopt_opt_rsqpg_offset(seed=rseed):
 
     cg_coords = cmap(test_coords)
 
-    kwargs = dict(
-        coords=cg_coords,
-        n_samples=1000,
-        inner=6.0,
-        outer=12.0,
-        width=0.5,
-        average=False,
-    )
+    kwargs = {
+        "coords": cg_coords,
+        "n_samples": 1000,
+        "inner": 6.0,
+        "outer": 12.0,
+        "width": 0.5,
+        "average": False,
+    }
 
-    basic_opt_proj = mv.random_residual_shift(
+    basic_opt_proj = mv.random_residual_shift(  # type: ignore [call-overload]
         forces=basic_opt_forces,
         randg=r.default_rng(seed=seed),
         **kwargs,
     )
-    optim_proj = mv.random_residual_shift(
+    optim_proj = mv.random_residual_shift(  # type: ignore [call-overload]
         forces=optim_forces,
         randg=r.default_rng(seed=seed),
         **kwargs,
