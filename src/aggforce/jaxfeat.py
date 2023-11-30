@@ -1,32 +1,37 @@
-"""JAX-based library for creating features for map optimization.
-"""
+"""JAX-based library for creating features for nonlinear map optimization."""
 
+from typing import Union, Tuple, Iterable, Callable
+from functools import partial
 import jax.numpy as jnp
 import jax
 import numpy as np
 from .map import smear_map
 from .linearmap import reduce_constraint_sets
 from .featlinearmap import id_feat
-from functools import partial
+from .map import LinearMap
+from .constfinder import Constraints
+from .featlinearmap import Features, FEATS_KEY, DIVS_KEY, NAMES_KEY
 
 
 def gb_feat(
-    points,
-    cmap,
-    constraints,
-    outer,
-    inner=0,
-    n_basis=10,
-    width=1.0,
-    dist_power=0.5,
-    batch_size=None,
-    lazy=True,
-    div_method="reorder",
-):
-    """Featurizes each fine-grained site by considering the distance to the
-    coarse-grained site at each frame.
+    points: np.ndarray,
+    cmap: LinearMap,
+    constraints: Constraints,
+    outer: float,
+    inner: float = 0,
+    n_basis: int = 10,
+    width: float = 1.0,
+    dist_power: float = 0.5,
+    batch_size: Union[None, int] = None,
+    lazy: bool = True,
+    div_method: str = "reorder",
+) -> Features:
+    """Featurize each site via its distance to a mapped site.
 
-    NOTE: This function uses JAX for acceleration.
+    Each fine-grained site is characterized via its distance to the coarse-grained
+    site at each frame.
+
+    This function uses JAX for acceleration.
 
     At each frame, the distances between a coarse-grained site and each
     fine-grained site are calculated. These distances are "binned" by applying a
@@ -38,9 +43,9 @@ def gb_feat(
     position before distance calculation and use the same one-hot slot; as a
     result, they have identical features at each frame.
 
-    Arguments
+    Arguments:
     ---------
-    points (jnp.DeviceArray):
+    points (np.ndarray):
         Positions of the fine_grained trajectory. Assumed to have shape
         (n_frames,n_fg_sites,n_dims).
     cmap (map.LinearMap):
@@ -76,9 +81,9 @@ def gb_feat(
         Determines how the divergence will be calculated; passed to
         gb_subfeat_jac as method.
 
-    Returns
+    Returns:
     -------
-    A dictionary with two key elements pairs:
+    A dictionary with two three elements pairs:
         'feats': list/generator of feature mats (n_frames, n_fg_sites, total_n_feats)
             The features do not changed between frames.
         'divs': list/generator of div mats (n_frames, total_n_feats, n_dim).
@@ -89,12 +94,10 @@ def gb_feat(
     except for 'names', which may have names which are shared for each cg site
     (or None).
     """
-
     # prep information needed for featurization
 
     # mapped CG points
-    cg_points = jnp.asarray(cmap(points))
-    points = jnp.asarray(points)
+    cg_points = jnp.asarray(cmap(np.asarray(points)))
     reduced_cons = reduce_constraint_sets(constraints)
     ids = tuple(id_feat(points, cmap, constraints, return_ids=True))
     # matrix for smearing points for constraints
@@ -108,21 +111,21 @@ def gb_feat(
     max_channels = max(ids)
 
     # shared option dict for featurization and div calls
-    f_kwargs = dict(
-        channels=ids,
-        max_channels=max_channels,
-        smear_mat=smearm,
-        inner=inner,
-        outer=outer,
-        width=width,
-        n_basis=n_basis,
-        dist_power=dist_power,
-    )
+    f_kwargs = {
+        "channels": ids,
+        "max_channels": max_channels,
+        "smear_mat": smearm,
+        "inner": inner,
+        "outer": outer,
+        "width": width,
+        "n_basis": n_basis,
+        "dist_power": dist_power,
+    }
 
     # we use abatch to break down computation. In order to do so, we make
     # wrapped callables that take simpler arguments
 
-    def subfeater(arg_inds, arg_cg_site):
+    def subfeater(arg_inds: jax.Array, arg_cg_site: int) -> jax.Array:
         sub_points = points[arg_inds]
         sub_cg_points = cg_points[arg_inds]
         feat = gb_subfeat(
@@ -133,17 +136,17 @@ def gb_feat(
         return feat
 
     # subsetted by abatch in feater and divver to mark where to evaluate
-    inds = np.arange(len(points))
+    inds = jnp.arange(len(points))
 
     # make function which batches the JAX calls to keep memory usage down
-    def feater(cg_site):
+    def feater(cg_site: int) -> np.ndarray:
         feat = abatch(
             func=subfeater, arr=inds, arg_cg_site=cg_site, chunk_size=batch_size
         )
         return np.asarray(feat)
 
     if lazy:
-        feats = (feater(x) for x in range(cmap.n_cg_sites))
+        feats: Iterable = (feater(x) for x in range(cmap.n_cg_sites))
     else:
         feats = [feater(x) for x in range(cmap.n_cg_sites)]
 
@@ -151,7 +154,7 @@ def gb_feat(
 
     # this function takes a set of indices for subsetting, this makes it
     # compatible with abatch
-    def subdivver(arg_inds, arg_cg_site):
+    def subdivver(arg_inds: jax.Array, arg_cg_site: int) -> jax.Array:
         sub_points = points[arg_inds]
         sub_cg_points = cg_points[arg_inds]
         div = gb_subfeat_jac(
@@ -163,29 +166,37 @@ def gb_feat(
         return div
 
     # make function which batches the JAX calls to keep memory usage down
-    def divver(cg_site):
+    def divver(cg_site: int) -> np.ndarray:
         div = abatch(
             func=subdivver, arr=inds, arg_cg_site=cg_site, chunk_size=batch_size
         )
         return np.asarray(div)
 
     if lazy:
-        divs = (divver(x) for x in range(cmap.n_cg_sites))
+        divs: Iterable = (divver(x) for x in range(cmap.n_cg_sites))
     else:
         divs = [divver(x) for x in range(cmap.n_cg_sites)]
 
-    return dict(feats=feats, divs=divs, names=None,)
+    return {FEATS_KEY: feats, DIVS_KEY: divs, NAMES_KEY: None}
 
 
-def abatch(func, arr, chunk_size, *args, **kwargs):
-    """Transparently applies a function over chunks of array.
+def abatch(
+    # mypy seems to not do partial signatures, but this function should take a first
+    # argument of a jax.Array, other args satisfied via args/kwargs sharing
+    func: Callable[..., jax.Array],
+    arr: jax.Array,
+    chunk_size: Union[None, int],
+    *args,
+    **kwargs,
+) -> jax.Array:
+    """Transparently apply a function over chunks of array.
 
     The results of func(arr) are computed by evaluating func(chunk), where chunk
     is a smaller piece of arr.
 
     NOTE: This function uses JAX calls.
 
-    Arguments
+    Arguments:
     ---------
     func (callable):
         Function applied to chunks of arr. Receives args/kwargs upon each
@@ -196,15 +207,16 @@ def abatch(func, arr, chunk_size, *args, **kwargs):
         Data to pass to func.
     chunk_size (positive integer):
         Size of array chunks (slicing across first index) to pass to func.
-    args/kwargs:
+    *args:
+        Passed to func at each invocation.
+    **kwargs:
         Passed to func at each invocation.
 
-    Returns
+    Returns:
     -------
     The results of func(arr) as computed by evaluating func(chunk).
     """
-
-    if chunk_size is None or chunk_size >= len(arr):
+    if chunk_size is None or chunk_size >= arr.shape[0]:
         return func(arr, *args, **kwargs)
     n_chunks = jnp.ceil(len(arr) / chunk_size).astype(jnp.int32)
     arrs = jnp.array_split(arr, n_chunks)
@@ -217,9 +229,13 @@ def abatch(func, arr, chunk_size, *args, **kwargs):
     static_argnames=["return_matrix", "return_displacements", "square"],
 )
 def distances(
-    xyz, cross_xyz=None, return_matrix=True, return_displacements=False, square=False
-):
-    """Calculates differentiable distances for each frame in a trajectory.
+    xyz: jax.Array,
+    cross_xyz: Union[jax.Array, None] = None,
+    return_matrix: bool = True,
+    return_displacements: bool = False,
+    square: bool = False,
+) -> jax.Array:
+    """Calculate differentiable distances for each frame in a trajectory.
 
     Returns an array where each slice is the distance matrix of a single frame
     of an argument.
@@ -227,7 +243,7 @@ def distances(
     NOTE: This function is similar to others in this package, but applies to JAX
     arrays.
 
-    Arguments
+    Arguments:
     ---------
     xyz (jnp.DeviceArray):
         An array describing the cartesian coordinates of a system over time;
@@ -244,8 +260,10 @@ def distances(
     return_displacements (boolean):
         If true, then instead of a distance array, an array of displacements is
         returned.
+    square (boolean):
+        If true, we return the square of the euclidean distance.
 
-    Returns
+    Returns:
     -------
     Returns jnp.DeviceArray, where the number of dimensions and size depend on
     the arguments.
@@ -263,7 +281,6 @@ def distances(
         similar to the shapes above but with an additional terminal axis for
         dimension.
     """
-
     if cross_xyz is not None and not return_matrix:
         raise ValueError("Cross distances only supported when return_matrix is truthy.")
     if return_displacements and not return_matrix:
@@ -276,7 +293,7 @@ def distances(
     if return_displacements:
         return displacement_matrix
     if square:
-        distance_matrix = (displacement_matrix ** 2).sum(axis=-1)
+        distance_matrix = (displacement_matrix**2).sum(axis=-1)
     else:
         distance_matrix = jnp.linalg.norm(displacement_matrix, axis=-1)
     if return_matrix:
@@ -289,10 +306,15 @@ def distances(
 
 @partial(jax.jit, inline=True, static_argnames=["n_basis"])
 def gaussian_dist_basis(
-    dists, outer, inner=0, n_basis=10, width=1.0, dist_power=0.5, clip=1e-3
-):
-    """Transforms arrays of distances into arrays of Gaussian "bins" of
-    distances.
+    dists: jax.Array,
+    outer: float,
+    inner: float = 0,
+    n_basis: int = 10,
+    width: float = 1.0,
+    dist_power: float = 0.5,
+    clip: float = 1e-3,
+) -> jax.Array:
+    """Transform arrays of distances into Gaussian "bins" of distances.
 
     NOTE: This function applies to JAX arrays.
 
@@ -302,9 +324,9 @@ def gaussian_dist_basis(
     NOTE: Distances outside inner/outer are not clipped; these values only
     control grid creation.
 
-    Arguments
+    Arguments:
     ---------
-    dists (jnp.DeviceArray):
+    dists (jax.Array):
         Array of distances. Can be any shape.
     outer (positive float):
         Ending distance use when creating grid of Gaussians.
@@ -324,14 +346,13 @@ def gaussian_dist_basis(
     clip (float):
         Passed to clipped_gauss.
 
-    Returns
+    Returns:
     -------
     Array where additional dimensions characterizing bins are applied to the
     (-1,) axis position. For example, if dists is shape (2,2) and n_basis=5
     the output shape is (2,2,5).
     """
-
-    pow_grid_points = jnp.linspace(inner ** dist_power, outer ** dist_power, n_basis)
+    pow_grid_points = jnp.linspace(inner**dist_power, outer**dist_power, n_basis)
     grid_points = pow_grid_points ** (1 / dist_power)
     feats = [
         clipped_gauss(inp=dists, center=o, width=width, clip=clip) for o in grid_points
@@ -340,9 +361,12 @@ def gaussian_dist_basis(
 
 
 @partial(jax.jit, inline=True)
-def clipped_gauss(inp, center, width=1.0, clip=1e-3):
-    """Clipped Gaussian; set to zero below a certain value and shifted to be
-    continuous.
+def clipped_gauss(
+    inp: jax.Array, center: float, width: float = 1.0, clip: float = 1e-3
+) -> jax.Array:
+    """Clipped Gaussian.
+
+    Gaussian output is set to zero below a certain value and shifted to be continuous.
 
     NOTE: This function applies to JAX arrays.
 
@@ -350,7 +374,7 @@ def clipped_gauss(inp, center, width=1.0, clip=1e-3):
     values are give a minimum value of clip. Finally, clip is subtracted from all
     values.
 
-    Arguments
+    Arguments:
     ---------
     inp (jnp.DeviceArray):
         Input values to be filtered through Gaussian. May be any shape.
@@ -360,11 +384,11 @@ def clipped_gauss(inp, center, width=1.0, clip=1e-3):
         Scaling inside Gaussian exponent.
     clip (float):
         Value at which Gaussian output is set to zero.
-    Returns
+
+    Returns:
     -------
     Array the same shape and size as inp, but transformed through a Gaussian.
     """
-
     gauss = jnp.exp(-(((inp - center) / width) ** 2))
     if clip is None:
         return gauss
@@ -375,9 +399,13 @@ def clipped_gauss(inp, center, width=1.0, clip=1e-3):
 @partial(
     jax.jit, inline=True, static_argnames=["channels", "max_channels", "jac_shape"]
 )
-def channel_allocate(feats, channels, max_channels, jac_shape=False):
-    """Transforms features given for each atom to one hot versions that
-    independently apply to groups of atoms.
+def channel_allocate(
+    feats: jax.Array, channels: Tuple[int], max_channels: int, jac_shape: bool = False
+) -> jax.Array:
+    """Transform atom features to one hot versions.
+
+    Features given for each atom correspond to one hot versions that independently apply
+    to groups of atoms.
 
     For example, if a frame has 4 fine-grained sites with features [[a,b,c,d]], it
     could be transformed into:
@@ -395,9 +423,9 @@ def channel_allocate(feats, channels, max_channels, jac_shape=False):
     a one-hot encoding; as a result, most of the values in the resulting feature
     set are zero.
 
-    Arguments
+    Arguments:
     ---------
-    feats (jnp.DeviceArray):
+    feats (jax.Array):
         Array containing the features for each fine-grained site at each frame.  Assumed
         to be of shape (n_frames, n_fg_sites, n_feats) or
         (n_feats, n_frames, n_fg_sites, n_dim) (see jac_shape).
@@ -418,14 +446,13 @@ def channel_allocate(feats, channels, max_channels, jac_shape=False):
         (n_frames, n_fg_sites, n_feats)
 
 
-    Returns
+    Returns:
     -------
-    jnp.DeviceArray of similar shape as input, but with feats dimension scaled
+    jax.Array of similar shape as input, but with feats dimension scaled
     to be max_channels*max_feats.
     """
-
     if jac_shape:
-        # jac is (n_feat, n_frame, n_fg_sites, n_dim)
+        # jac is (n_feat, n_frame, n_fg_sites, n_dim) noqa false ERA001 trigger
         n_feats = feats.shape[0]
         n_frames = feats.shape[1]
         n_dim = feats.shape[3]
@@ -474,28 +501,28 @@ def channel_allocate(feats, channels, max_channels, jac_shape=False):
     ],
 )
 def gb_subfeat(
-    points,
-    cg_points,
-    channels,
-    max_channels,
-    smear_mat=None,
-    collapse=False,
-    channelize=True,
+    points: jax.Array,
+    cg_points: jax.Array,
+    channels: Tuple[int],
+    max_channels: int,
+    smear_mat: Union[None, jax.Array],
+    collapse: bool = False,
+    channelize: bool = True,
     **kwargs,
-):
-    """Creates features (without divergences) using Gaussian bins and distances.
+) -> jax.Array:
+    """Create features (without divergences) using Gaussian bins and distances.
 
     Points are mapped using smear_mat, per frame distances are calculated,
     these distances are expressed using Gaussian bins, and these bins are then
     distributed over an array to make them type specific.
 
-    Arguments
+    Arguments:
     ---------
-    points (jnp.DeviceArray):
+    points (jax.Array):
         Positions of the fine_grained trajectory. Assumed to have shape
         (n_frames,n_fg_sites,n_dims) or (n_fg_sites,n_dims); in the
         latter case, a dummy n_frames index is added during computation.
-    cg_points (jnp.DeviceArray):
+    cg_points (jax.Array):
         Positions of coarse-grained trajectory. Assumed to have shape
         (n_frames,n_cg_sites,n_dims). Current usage only considers 1 cg site at a
         time.
@@ -510,7 +537,7 @@ def gb_subfeat(
         Larger values increase memory usage, so the most memory efficient
         (max_channels,channels) pair has channels starting at 0 with maximum value
         at max_channels, with no unused index in between.
-    smear_mat (jnp.DeviceArray):
+    smear_mat (jax.Array):
         Mapping matrix multiplied with points via trjdot prior to calculating
         distances. Useful for accounting for molecular constraints. Should be
         shape (n_fg_sites,n_fg_sites).
@@ -521,10 +548,10 @@ def gb_subfeat(
     channelize (boolean):
         Whether to distribute the Gaussian features over one-hot-like channels
         to make them specific to various groups of atoms.
-    kwargs:
+    **kwargs:
         Passed to gaussian_dist_basis.
 
-    Returns
+    Returns:
     -------
     If collapse, an array of shape (n_features,) is returned; else,
     jnp.DeviceArray of ether shape (n_frames,n_fg_sites,n_features) or
@@ -532,7 +559,6 @@ def gb_subfeat(
     only has two dimensions.  n_features is set via kwargs, max_channels,
     and gaussian_dist_basis.
     """
-
     # if our input has no frame axis, add dummy
     if len(points.shape) == 2:
         points = points[None, ...]
@@ -558,20 +584,16 @@ def gb_subfeat(
     return collapsed
 
 
-# @partial(
-#   jax.jit,
-#   static_argnames=["inner", "outer", "channels", "max_channels", "method", "n_basis"],
-# )
 def gb_subfeat_jac(
-    points,
-    cg_points,
-    channels,
-    max_channels,
-    smear_mat=None,
-    method="reorder",
+    points: jax.Array,
+    cg_points: jax.Array,
+    channels: int,
+    max_channels: int,
+    smear_mat: Union[jax.Array, None] = None,
+    method: str = "reorder",
     **kwargs,
-):
-    """Calculates per frame (collapsed) divergences for gb_subfeat.
+) -> jax.Array:
+    """Calculate per frame (collapsed) divergences for gb_subfeat.
 
     Most arguments are passed to gb_subfeat; see that function for more details.
     However, note that not all the arguments are the same (see, for example, the
@@ -581,12 +603,12 @@ def gb_subfeat_jac(
     their results in tandem (even if this function;s internal call to gb_subfeat
     changes certain arguments).
 
-    Arguments
+    Arguments:
     ---------
-    points (jnp.DeviceArray):
+    points (jax.Array):
         Positions of the fine_grained trajectory. Assumed to have shape
         (n_frames,n_fg_sites,n_dims).
-    cg_points (jnp.DeviceArray):
+    cg_points (jax.Array):
         Positions of coarse-grained trajectory. Assumed to have shape
         (n_frames,n_cg_sites,n_dims); current usage only considers 1 cg site at a
         time.
@@ -601,7 +623,7 @@ def gb_subfeat_jac(
         Larger values increase memory usage, so the most memory efficient
         (max_channels,channels) pair has channels starting at 0 with maximum value
         at max_channels, with no unused index in between.
-    smear_mat (jnp.DeviceArray):
+    smear_mat (jax.Array):
         Mapping matrix multiple with points via trjdot prior to calculating
         distances. Useful for accounting for molecular constraints. Should be
         shape (n_fg_sites,n_fg_sites).
@@ -615,43 +637,47 @@ def gb_subfeat_jac(
     kwargs:
         Passed to gb_subfeat.
 
-    Returns
+    Returns:
     -------
-    jnp.DeviceArray of shape (n_frames, n_features, n_dims=3) containing the per
+    jax.Array of shape (n_frames, n_features, n_dims=3) containing the per
     frame Jacobian values summed over the fine grained particles.
     """
-
     if method == "basic":
         # collapse=True-> sums features over all atoms and frames to that
         # jacobian calculation avoids trivial zero entries.
-        to_jac = lambda x: gb_subfeat(
-            x,
-            cg_points=cg_points,
-            channels=channels,
-            max_channels=max_channels,
-            smear_mat=smear_mat,
-            collapse=True,
-            **kwargs,
-        )
+        def to_jac(x: jax.Array) -> jax.Array:
+            return gb_subfeat(
+                x,
+                cg_points=cg_points,
+                channels=channels,
+                max_channels=max_channels,
+                smear_mat=smear_mat,
+                collapse=True,
+                **kwargs,
+            )
+
         jac = jax.jacfwd(to_jac)(points)
         # sum over fine-grained sites
         traced_jac = jac.sum(axis=(2,))
         reshaped_jac = jnp.swapaxes(traced_jac, 0, 1)
         return reshaped_jac
     elif method == "reorder":
-        to_jac = lambda x: gb_subfeat(
-            x,
-            cg_points=cg_points,
-            channels=channels,
-            max_channels=max_channels,
-            smear_mat=smear_mat,
-            collapse=True,
-            channelize=False,
-            **kwargs,
-        )
-        # jac is (n_feat, n_frame, n_fg_sites, n_dim)
+
+        def to_jac(x: jax.Array) -> jax.Array:
+            return gb_subfeat(
+                x,
+                cg_points=cg_points,
+                channels=channels,
+                max_channels=max_channels,
+                smear_mat=smear_mat,
+                collapse=True,
+                channelize=False,
+                **kwargs,
+            )
+
+        # jac is (n_feat, n_frame, n_fg_sites, n_dim) noqa false ERA001 trigger
         jac = jax.jacrev(to_jac)(points)
-        # ch_jac is (exp_n_feat, n_frame, n_fg_sites, n_dim)
+        # ch_jac is (exp_n_feat, n_frame, n_fg_sites, n_dim) noqa false ERA001 trigger
         ch_jac = channel_allocate(jac, channels, max_channels, jac_shape=True)
         # sum over fine-grained sites
         traced_ch_jac = ch_jac.sum(axis=(2,))
@@ -662,9 +688,8 @@ def gb_subfeat_jac(
 
 
 @jax.jit
-def trjdot(points, factor):
-    """Performs a specific JAX matrix product when dealing with mdtraj-style arrays
-    and a matrix.
+def trjdot(points: jax.Array, factor: jax.Array) -> jax.Array:
+    """Perform a JAX matrix product with mdtraj-style arrays and a matrix.
 
     NOTE: This function is similar to others in this package, but applies to JAX
     arrays
@@ -690,7 +715,7 @@ def trjdot(points, factor):
         (n_steps,n_cg_sites,n_sites). This situation is determined by
         considering the dimension of factor.
 
-    Arguments
+    Arguments:
     ---------
     points (jnp.DeviceArray):
         3-dim array of shape (n_steps,n_sites,n_dims). To be mapped using
@@ -699,12 +724,11 @@ def trjdot(points, factor):
         2-dim array of shape (n_cg_sites,n_sites) or 3-dim array of shape
         (n_steps,n_cg_sites,n_sites). Used to map points.
 
-    Returns
+    Returns:
     -------
     jnp.DeviceArray of shape (n_steps,n_cg_sites,n_dims) contained points mapped
     with factor.
     """
-
     # knp einsum doesn't seem to accept the same path optimization directions
     # as np einsum, so we just pass "greedy"
     if len(factor.shape) == 2:

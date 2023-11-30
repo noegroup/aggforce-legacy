@@ -1,17 +1,23 @@
-"""pytest unit tests for the agg module
+"""Test linear optimized force map generated for a water dimer.
+
+We expect that an optimal force map for a configurational map isolating the oxygens will
+include contributions from the hydrogens. This test confirms that the linear
+force map optimization scheme returns this result.
+
+No bond constraints are present in the reference trajectory.
+
+This result is not a mathematical certainty, but has been empirically true.
 """
-
-
-import os
+from pathlib import Path
 import numpy as np
 from aggforce import linearmap as lm
 from aggforce import agg as ag
 
 
-def test_agg_opt():
-    """Test optimized force aggregation for a flexible water dimer"""
-
-    dimerfile = os.path.join(os.path.dirname(__file__), "data/waterdimer.npz")
+def test_agg_opt() -> None:
+    """Test optimized force aggregation for a flexible water dimer."""
+    location = Path(__file__).parent
+    dimerfile = str(location / "data/waterdimer.npz")
     dimerdata = np.load(dimerfile)
     forces = dimerdata["Fs"]
 
@@ -29,4 +35,4 @@ def test_agg_opt():
     # aggregation mapping: we expect that contributions from each water are added up
     # to cancel the intramolecular bond forces
     agg_mapping = np.array([[1, 1, 1, 0, 0, 0], [0, 0, 0, 1, 1, 1]], dtype=float)
-    assert np.allclose(optim_results["map"]._standard_matrix, agg_mapping, atol=5e-3)
+    assert np.allclose(optim_results["map"].standard_matrix, agg_mapping, atol=5e-3)

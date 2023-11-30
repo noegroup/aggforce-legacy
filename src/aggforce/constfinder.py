@@ -1,22 +1,26 @@
-"""Provides tools for inferring constrained atoms from molecular trajectories.
+"""Tools for inferring constrained bonds from molecular trajectories.
+
 Useful for automatically obtaining a list of molecularly constrained atoms to
 feed into mapping methods. Currently, only pairwise distance constraints are
 considered.
 """
 
 import numpy as np
+from typing import Set, FrozenSet, Union
+
+Constraints = Set[FrozenSet[int]]
 
 
-def guess_pairwise_constraints(xyz, threshold=1e-3):
-    """Finds pairs of atoms which are likely constrained by considering how much
-    their pairwise distance fluctuates over a set of frames.
+def guess_pairwise_constraints(xyz: np.ndarray, threshold: float = 1e-3) -> Constraints:
+    """Find pairs of sites which are likely constrained via fluctuations.
 
+    Fluctuations are found by
     The pairwise distances for each frame are calculated; then, the standard
     deviation for each distance over time is calculated. If this standard
     deviation is lower than a threshold, the two atoms are considered
     constrained.
 
-    Arguments
+    Arguments:
     ---------
     xyz (numpy.ndarray):
         An array describing the cartesian coordinates of a system over time;
@@ -25,26 +29,30 @@ def guess_pairwise_constraints(xyz, threshold=1e-3):
         Distances with standard deviations lower than this value are considered
         to be constrainted. Has units of xyz.
 
-    Returns
+    Returns:
     -------
     A set of frozen sets, each of which contains a pair of indices of sites
     which are guessed to be pairwise constrained.
     """
-
     dists = distances(xyz)
     sds = np.sqrt(np.var(dists, axis=0))
-    _ = np.fill_diagonal(sds, threshold * 2)
+    np.fill_diagonal(sds, threshold * 2)
     inds = np.nonzero(sds < threshold)
-    return set(frozenset(v) for v in zip(*inds))
+    return {frozenset(v) for v in zip(*inds)}
 
 
-def distances(xyz, cross_xyz=None, return_matrix=True, return_displacements=False):
-    """Calculates the distances for each frame in a trajectory.
+def distances(
+    xyz: np.ndarray,
+    cross_xyz: Union[None, np.ndarray] = None,
+    return_matrix: bool = True,
+    return_displacements: bool = False,
+) -> np.ndarray:
+    """Calculate the distances for each frame in a trajectory.
 
     Returns an array where each slice is the distance matrix of a single frame
     of an argument.
 
-    Arguments
+    Arguments:
     ---------
     xyz (np.ndarray):
         An array describing the cartesian coordinates of a system over time;
@@ -62,7 +70,7 @@ def distances(xyz, cross_xyz=None, return_matrix=True, return_displacements=Fals
         If true, then instead of a distance array, an array of displacements is
         returned.
 
-    Returns
+    Returns:
     -------
     Returns numpy.ndarrays, where the number of dimensions and size depend on
     the arguments.
@@ -80,7 +88,6 @@ def distances(xyz, cross_xyz=None, return_matrix=True, return_displacements=Fals
         similar to the shapes above but with an additional terminal axis for
         dimension.
     """
-
     if cross_xyz is not None and not return_matrix:
         raise ValueError("Cross distances only supported when return_matrix is truthy.")
     if return_displacements and not return_matrix:

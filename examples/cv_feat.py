@@ -1,11 +1,13 @@
-"""Example production script for running cross validation for a
+"""Demonstrates cross validation for a linear optimized force map.
+
+Example production script for running cross validation for a
 configurationally dependent force map. Note that this may be computationally
 expensive.
 
 This example module does not produce optimized forces. Instead, it reports how
 various hyperparameter choices affect the holdout force residual. Once optimal
 hyperparameters are found, the user should then use those parameters for force
-generation.
+map generation.
 
 In order to use this script, get_data should likely be modified to grab numpy
 arrays of coordinates, forces, and pdbs from an appropriate filesystem
@@ -18,13 +20,23 @@ the usage of various parts of the main code.
 NOTE: You must have JAX installed to run this script.
 """
 
+from typing import (
+    Dict,
+    Mapping,
+    TypeVar,
+    Hashable,
+    Tuple,
+    Any,
+    List,
+    Sequence,
+)
 import re
+from pathlib import Path
 from itertools import product
 import numpy as np
-import mdtraj as md
-import pandas as pd
+import mdtraj as md  # type: ignore [import-untyped]
+import pandas as pd  # type: ignore [import-untyped]
 from copy import copy
-from glob import glob
 
 # has high level routines for cross validation
 from aggforce import agg as ag
@@ -32,7 +44,7 @@ from aggforce import agg as ag
 # has code for defining linear maps
 from aggforce import linearmap as lm
 
-# provides tools for detecting constraints from molecular n trajectories
+# provides tools for detecting constraints from molecular trajectories
 from aggforce import constfinder as cf
 
 # has the routines for generating a map that is dependent on configuration
@@ -45,10 +57,11 @@ from aggforce import jaxfeat as jf
 NFOLDS = 5
 
 
-def get_data():
-    """Function encapsulating obtaining data. This is currently grabs a group of
-    numpy coordinate and force files, stacks them, and then along with a
-    pdb-derived mdtraj trajectory and kbt value returns them.
+def get_data() -> Tuple[np.ndarray, np.ndarray, md.Trajectory, float]:
+    r"""Return data for analysis.
+
+    This is currently grabs a group of numpy coordinate and force files, stacks them,
+    and then along with a pdb-derived mdtraj trajectory and kbt value returns them.
 
     Note that we must manually provide a value for KbT in appropriate units.
 
@@ -57,11 +70,11 @@ def get_data():
     A tuple of the following:
         coordinates array
             array of positions as a function of time (shape should be
-            (n_frames,n_sites,n_dims). Should correspond to the same frames
+            (n_frames,n_sites,n_dims)). Should correspond to the same frames
             as the forces array.
         forces array
             array of forces as a function of time (shape should be
-            (n_frames,n_sites,n_dims). Should correspond to the same frames
+            (n_frames,n_sites,n_dims)). Should correspond to the same frames
             as the coordinates array.
         mdtraj.Trajectory
             mdtraj trajectory corresponding to the sites in the coordinates and
@@ -71,26 +84,32 @@ def get_data():
             frame (it can be generated from a pdb).
         KbT (float)
             Boltzmann's constant times the temperature of the reference
-            trajectory
+            trajectory. See code for units.
     """
-
     kbt = 0.6955215  # kbt for 350K in kcal/mol, known a priori
-    force_list = [np.load(name)["Fs"] for name in glob("./record_*_prod_*.npz")]
-    coord_list = [np.load(name)["coords"] for name in glob("./record_*_prod_*.npz")]
+
+    force_list = [
+        np.load(str(name))["Fs"] for name in Path().glob("record_*_prod_*.npz")
+    ]
+    coord_list = [
+        np.load(str(name))["coords"] for name in Path().glob("record_*_prod_*.npz")
+    ]
     forces = np.vstack(force_list)
     coords = np.vstack(coord_list)
     pdb = md.load("data/cln025.pdb")
     return (coords, forces, pdb, kbt)
 
 
-def gen_config_map(pdb, string, n_sites):
-    """Create the configurational map. This is needed as it defines constraints
-    which dictate which force maps are feasible.
+def gen_config_map(pdb: md.Trajectory, string: str) -> lm.LinearMap:
+    """Create the configurational map.
+
+    This is needed as it defines constraints which dictate which force maps are
+    feasible.
 
     We here generate a (usually carbon alpha) configurational map using mdtraj's
     topology. The map could also be specified externally.
 
-    Arguments
+    Arguments:
     ---------
     pdb (mdtraj.Trajectory):
         Trajectory object describing the fine-grained (e.g. atomistic)
@@ -99,45 +118,52 @@ def gen_config_map(pdb, string, n_sites):
         Regex string which is compared against the str() of the topology.atoms
         entry--- if matched that atom is retained in the configurational map.
 
-    Returns
+    Returns:
     -------
     A LinearMap object which characterizes the configurational map. There are
     multiple ways to initialize this object; see the main code for more details.
     """
-
     inds = []
     atomlist = list(pdb.topology.atoms)
+    # record which atoms match the string via str casing, e.g., which are carbon alphas.
     for ind, a in enumerate(atomlist):
         if re.search(string, str(a)):
             inds.append([ind])
-    return lm.LinearMap(inds, n_fg_sites=n_sites)
+    return lm.LinearMap(inds, n_fg_sites=pdb.xyz.shape[1])
 
 
 # defines sane default parameters for the featurization function. These were
 # found to produce okay results in previous runs on CLN025.
-default_feat_args = dict(
-    inner=0.0, outer=8.0, width=1.0, n_basis=8, batch_size=5000, lazy=True
-)
+default_feat_args = {
+    "inner": 0.0,
+    "outer": 8.0,
+    "width": 1.0,
+    "n_basis": 8,
+    "batch_size": 5000,
+    "lazy": True,
+}
 
 
-def gen_feater(*args, **kwargs):
-    """Creates a composite featurization function that has both identity
-    features and configurationally dependent features. These are implemented as
-    two different functions, so we use provided tools to "glue" the two
-    featurization functions together (Multifeaturize). We also associate
-    arguments with the configurationally dependent (gb_feat) featurizer using
+def gen_feater(*args: Any, **kwargs: Any) -> p.GeneralizedFeaturizer:
+    """Create a composite featurization function.
+
+    Resulting featurizer has both identity features and configurationally dependent
+    features.  These are implemented as two different functions, so we use provided
+    tools to "glue" the two featurization functions together (Multifeaturize). We also
+    associate arguments with the configurationally dependent (gb_feat) featurizer using
     Curry.
 
-    Arguments
+    Arguments:
     ---------
-    args/kwargs
+    *args:
+        These are wrapped into the gb_feat featurizer
+    **kwargs:
         These are wrapped into the gb_feat featurizer
 
-    Returns
+    Returns:
     -------
     A combined featurizer (technically, a Multifeaturize object).
     """
-
     prod_kwargs = copy(default_feat_args)
     prod_kwargs.update(kwargs)
     # Curry takes a function and arguments, and returns a callable object that
@@ -150,19 +176,20 @@ def gen_feater(*args, **kwargs):
     # id_feat is the featurizer that produces a one-hot vector for each atom
     # that roughly encodes the index of that atom (constraints make it more
     # complicated).
-    return p.Multifeaturize([p.id_feat, f0])
+    return p.Multifeaturize([p.id_feat, f0])  # type: ignore [list-item]
 
 
-def gen_feater_grid(**kwargs):
-    """Creates a list of featurization functions which have preset parameters.
+def gen_feater_grid(**kwargs: Any) -> List[p.GeneralizedFeaturizer]:
+    """Create a list of featurization functions which have preset parameters.
+
     These parameters are chosen as all possible combinations of the arguments.
-    Thsi function calls gen_feater, and as a result produces featurizers that
-    are a compositive of id_feat and gb_feat: they have both one-hot id features
+    This function calls gen_feater, and as a result produces featurizers that
+    are a composite of id_feat and gb_feat: they have both one-hot id features
     and configurationally dependent features.
 
-    Arguments
+    Arguments:
     ---------
-    kwargs:
+    **kwargs:
         each should be a list of possible values for a hyperparameter that has
         the same argument names. These values are combined to produce the
         featurization functions.
@@ -175,11 +202,10 @@ def gen_feater_grid(**kwargs):
                         a=3,b=5
                         a=3,b=6
 
-    Returns
+    Returns:
     -------
     List of featurizers with values baked in via Curry.
     """
-
     arg_keys, arg_values = zip(*((x, y) for x, y in kwargs.items()))
     grid_iter = product(*arg_values)
     featers = []
@@ -189,42 +215,46 @@ def gen_feater_grid(**kwargs):
     return featers
 
 
-def merge(*dicts):
-    """Combines multiple dictionaries into a single dictionary.
+K = TypeVar("K", bound=Hashable)
+V = TypeVar("V")
 
-    Arguments
+
+def merge(*dicts: Mapping[K, V]) -> Dict[K, V]:
+    """Combine multiple dictionaries into a single dictionary.
+
+    Arguments:
     ---------
-    *dicts (dictionaries):
-        Dictionaries to be combined. If keys are duplicated across
+    *dicts (Mappings):
+        Dictionaries/Mappings to be combined. If keys are duplicated across
         dictionaries, the right most dictionary's element will be present in the
         output.
 
-    Results
+    Results:
     -------
     A single dictionary containing all the key-value pairs in the arguments
     """
-
-    new = {}
+    new: Dict[K, V] = {}
     for i in dicts:
         new.update(i)
     return new
 
 
-def tabulate(dicts):
-    """Transforms a list of dicts into a panda.
+def tabulate(dicts: Sequence[Mapping[K, V]]) -> pd.DataFrame:
+    """Transform a iterable of mappings into a panda.
 
-    Arguments
+    Arguments:
     ---------
-    dicts (list of dictionaries):
-        each dictionary should have the same keys, and is assumed to represent ta
+    dicts (Sequence (e.g., list) of dictionaries):
+        Each dictionary should have the same keys, and is assumed to represent ta
         single row of the resulting DataFrame.
 
-    Returns
+        Must have at least one element.
+
+    Returns:
     -------
     pandas.DataFrame that has values from each dicts member in each row. Column
     names are the keys of the dictionaries.
     """
-
     keys = list(dicts[0].keys())
     content = {}
     for key in keys:
@@ -235,20 +265,22 @@ def tabulate(dicts):
     return pd.DataFrame(content)
 
 
-def make_df(cv_results, key="scores"):
-    """Transforms the output of the cross validation routine into a more
-    readable DataFrame.
+def make_df(cv_results: Dict[str, Dict[Any, Any]], key: str = "scores") -> pd.DataFrame:
+    """Transform cross validation results into a readable DataFrame.
 
-    NOTE: This function is written based on what is known about the
-    featurizations applied in this module. It does not apply to the generic
-    output of the cross validation routines.
+    This function is written based on what is known about the featurizations applied in
+    this module. It does not apply to the generic output of the cross validation
+    routines.
 
-    Arguments
+    Arguments:
     ---------
     cv_results (dictionary):
         The typical output of the *cv* routine called in this module.
+    key (string):
+        Passed to .sort_values() of the table we generate. Likely specifies a column to
+        sort by.
 
-    Returns
+    Returns:
     -------
     pandas DataFrame which has a column for each hyperparameter and a column for
     the value indexed under key. Usually, key is "scores" and this final value
@@ -256,7 +288,6 @@ def make_df(cv_results, key="scores"):
     specially and are transformed into a vector containing their baked in
     (Curried) arguments.
     """
-
     content = cv_results[key]
     rows = []
     for label, value in content.items():
@@ -273,19 +304,22 @@ def make_df(cv_results, key="scores"):
     return tab
 
 
-def prune(tab):
-    """Takes a pandas DataFrame and removes columns which only have a single
+def prune(tab: pd.DataFrame) -> pd.DataFrame:
+    """Prune a DataFrame by removing redundant columns.
+
+    Takes a pandas DataFrame and removes columns which only have a single
     unique value. A convenience function for make things more readable.
     """
-
     for col in tab.columns:
         if len(tab.loc[:, col].unique()) == 1:
             tab.drop(col, axis=1, inplace=True)
     return tab
 
 
-def main():
-    """This routine is a production script for finding a good configurationally
+def main() -> None:
+    """Sample function for find a nonlinear force map via cross validation.
+
+    Production script for finding a good configurationally
     dependent force map for CLN025 using cross validation. We do not use the
     derived parameters to actually map the forces.
 
@@ -302,10 +336,9 @@ def main():
        - transform the cross validation output into a more readable DataFrame
          and save it
     """
-
     coords, forces, pdb, kbt = get_data()
     # cmap is the configurational coarse-grained map
-    cmap = gen_config_map(pdb, "CA$", coords.shape[1])
+    cmap = gen_config_map(pdb, "CA$")
     # guess molecular constraints
     constraints = cf.guess_pairwise_constraints(coords[0:10], threshold=1e-3)
 
@@ -349,13 +382,18 @@ def main():
     # dependent maps. We scan over the featurizer used and the l2_regularization
     # imposed. The featurizer is a single argument, so we first generate a
     # "grid" of featurizers, each of which has a different hyperparameter set.
-    # featurizers = gen_feater_grid(
-    #    inner=[0.0, 1.0, 2.0, 3.0],
-    #    outer=[7.0, 8.0, 9.0],
-    #    n_basis=[8, 9],
-    #    width=[0.7, 1.0, 1.3],
-    # )
-    # l2_regs = [5e1, 1e2]
+
+    # more expression CV scanning set:
+    # ruff doesn't like commented out code, but this is worth keeping.
+
+    # featurizers = gen_feater_grid( # noqa: ignore
+    #    inner=[0.0, 1.0, 2.0, 3.0],# noqa: ERA001
+    #    outer=[7.0, 8.0, 9.0], # noqa: ERA001
+    #    n_basis=[8, 9], # noqa: ERA001
+    #    width=[0.7, 1.0, 1.3], # noqa: ERA001
+    # ) # noqa: ignore
+    # l2_regs = [5e1, 1e2] # noqa: ERA001
+
     featurizers = gen_feater_grid(
         inner=[0.0],
         outer=[7.0],

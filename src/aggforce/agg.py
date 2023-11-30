@@ -1,5 +1,4 @@
-r"""Provides an interface for optimally aggregating forces from a given molecular
-trajectory.
+r"""Provides interface for optimally aggregating forces.
 
 Methods are described in the following problem setting:
 
@@ -7,32 +6,48 @@ We have a fine grained system (with n_fg particles) which we map to
 coarse-grained system (with n_cg particles) using a linear mapping function. The
 configurational portion of this map is already set; methods here provide ways to
 calculate the force map.
+
+project_forces creates a suitable force map using a variety of methods (linear and
+nonlinear). project_forces_grid_cv performs cross validation.
 """
 
+from typing import (
+    Union,
+    Set,
+    FrozenSet,
+    Callable,
+    Dict,
+    Any,
+    Collection,
+    List,
+    NamedTuple,
+    Tuple,
+    Mapping,
+    TypeVar,
+)
 from gc import collect
 from itertools import product
 import numpy as np
-from collections import namedtuple
 from . import linearmap
 from . import constfinder
+from .map import LinearMap
 
 
 def project_forces(
-    xyz,
-    forces,
-    config_mapping,
-    constrained_inds="auto",
-    method=linearmap.qp_linear_map,
-    only_return_forces=False,
+    xyz: Union[None, np.ndarray],
+    forces: np.ndarray,
+    config_mapping: LinearMap,
+    constrained_inds: Union[Set[FrozenSet[int]], str, None] = "auto",
+    method: Callable[..., Callable] = linearmap.qp_linear_map,
     **kwargs
-):
-    r"""Returns for an optimal force map.
+) -> Dict[str, Any]:
+    r"""Produce optimized force map.
 
     NOTE: Performs convenience operations (e.g., making sure the mapping matrix
     is in the correct form) so that internal methods can have strong assumptions
     about arguments.
 
-    Arguments
+    Arguments:
     ---------
     xyz (np.ndarray):
         Three dimensional array of shape (n_steps,n_sites,n_dims). Contains the
@@ -54,13 +69,10 @@ def project_forces(
         desired, call it externally and pass its output through this argument.
     method (callable):
         Specifies what method to use to find the optimal map.
-    only_return_forces (boolean):
-        If true, only the mapped forces are returned. If false, a dictionary
-        with more results in returned.
     kwargs:
         Passed to method.
 
-    Returns
+    Returns:
     -------
     If only_return_forces, return an np.ndarray of shape
     (n_steps,n_cg_sites,n_dims) which contains the optimally mapped forces.
@@ -77,10 +89,12 @@ def project_forces(
             Set of frozensets characterizing the molecular constraints on the
             system. Useful if constrained_inds is set to 'auto'.
     """
-
     if constrained_inds == "auto":
-        constrained_inds = constfinder.guess_pairwise_constraints(xyz)
-    force_map = method(
+        if isinstance(xyz, np.ndarray):
+            constrained_inds = constfinder.guess_pairwise_constraints(xyz)
+        else:
+            raise ValueError("If constrained_inds is 'auto', xyz cannot be None.")
+    force_map: Callable = method(
         xyz=xyz,
         config_mapping=config_mapping,
         forces=forces,
@@ -88,8 +102,6 @@ def project_forces(
         **kwargs
     )
     mapped_forces = force_map(points=forces, copoints=xyz)
-    if only_return_forces:
-        return mapped_forces
     to_return = {}
     to_return.update({"projected_forces": mapped_forces})
     to_return.update({"map": force_map})
@@ -98,14 +110,23 @@ def project_forces(
     return to_return
 
 
-def project_forces_grid_cv(cv_arg_dict, forces, xyz=None, n_folds=5, *args, **kwargs):
+T = TypeVar("T")
+
+
+def project_forces_grid_cv(
+    cv_arg_dict: Mapping[str, List[T]],
+    forces: np.ndarray,
+    xyz: Union[np.ndarray, None] = None,
+    n_folds: int = 5,
+    **kwargs
+) -> Dict[str, Dict[NamedTuple, T]]:
     """Cross validation over project_forces using a grid of parameters.
 
     Note: this function does not choose an optimal model. Instead, it performs
     cross validation for each parameter listed in cv_arg_dict. You should use
     this to select an optimal hyperparameter and then train a production model.
 
-    Arguments
+    Arguments:
     ---------
     cv_arg_dict (dictionary):
         Contains arguments to run cross validation over. Must be of the
@@ -119,25 +140,26 @@ def project_forces_grid_cv(cv_arg_dict, forces, xyz=None, n_folds=5, *args, **kw
         project_forces, unless it is None, in which case it is simply passed.
     n_folds (positive integer):
         Number of cross validation folds to use.
-    *args/**kwargs:
+    *args:
+        Passed to project_forces.
+    **kwargs:
         Passed to project_forces.
 
-    Returns
+    Returns:
     -------
     dictionary composed of a series of dictionaries containing
     <parameters>:<holdout score> pairs, where parameter is each is
     force_smoothness evaluated each fold and then averaged. 'scores' indexes the
     for mean force fluctuation values, 'sds' indexes their sample standard
     deviations, and 'n_runs' indexes the number of optimization runs that
-    completed successfuly. If no runs successfully finish, then the standard
+    completed successfully. If no runs successfully finish, then the standard
     deviation and mean entries are set to None. <parameters> is represented by a
-    custom namedtuple-derived instance.
+    custom NamedTuple-derived instance.
     """
-
     # make fold indices
     n_frames = forces.shape[0]
     frames = np.arange(n_frames)
-    np.random.shuffle(frames)
+    np.random.default_rng().shuffle(frames)
     chunked_frame_inds = np.array_split(ary=frames, indices_or_sections=n_folds, axis=0)
 
     # create sequence of indices which are outside each fold (for training)
@@ -147,7 +169,7 @@ def project_forces_grid_cv(cv_arg_dict, forces, xyz=None, n_folds=5, *args, **kw
         compl_chunked_frame_inds.append(np.concatenate(outside_chunks))
 
     procced_cv_args = process_cvargs(cv_arg_dict)
-    cv_results = dict(scores={}, sds={}, n_runs={})
+    cv_results: Dict[str, Dict[Any, Any]] = {"scores": {}, "sds": {}, "n_runs": {}}
     # iterate over values of parameter
     for cv_arg_label, cv_arg_dict in procced_cv_args:
         cv_fold_scores = []
@@ -163,7 +185,7 @@ def project_forces_grid_cv(cv_arg_dict, forces, xyz=None, n_folds=5, *args, **kw
             # use training data for parameterization
             try:
                 trained_map = project_forces(
-                    forces=train_forces, xyz=train_xyz, *args, **combined_kwargs
+                    xyz=train_xyz, forces=train_forces, **combined_kwargs
                 )["map"]
                 # make validation data
                 val_forces = forces[val_inds]
@@ -179,25 +201,18 @@ def project_forces_grid_cv(cv_arg_dict, forces, xyz=None, n_folds=5, *args, **kw
             except ValueError as e:
                 print(e)
             collect()
-        if len(cv_fold_scores) > 0:
-            mean = sum(cv_fold_scores) / len(cv_fold_scores)
-            sd = sum([(o - mean) ** 2 for o in cv_fold_scores])
-            sd /= len(cv_fold_scores) - 1
-            sd = sd ** (0.5)
-        else:
-            sd = None
-            mean = None
-        cv_results["scores"].update({cv_arg_label: mean})
-        cv_results["sds"].update({cv_arg_label: sd})
+        cv_results["scores"].update({cv_arg_label: mean(cv_fold_scores)})
+        cv_results["sds"].update({cv_arg_label: sample_sd(cv_fold_scores)})
         cv_results["n_runs"].update({cv_arg_label: len(cv_fold_scores)})
     return cv_results
 
 
-def process_cvargs(arg_dict):
-    """Transforms a dictionary representing argument values into a reformatted list
-    representing a grid of parameter combinations.
+def process_cvargs(
+    arg_dict: Mapping[str, List[Any]]
+) -> List[Tuple[NamedTuple, Dict[str, Any]]]:
+    """Transform argument values into a "grid" of parameter combinations.
 
-    Arguments
+    Arguments:
     ---------
     arg_dict (dictionary):
         Arguments to process. Assumed to have the form
@@ -209,7 +224,7 @@ def process_cvargs(arg_dict):
         where key* are the names of the arguments, and key*_arg* are the
         argument values.
 
-    Returns
+    Returns:
     -------
     A list, where entries are tuples of the form (using the example above):
         (<namedtuple>(key1=key1_arg1, key2=key1_arg1),
@@ -223,6 +238,8 @@ def process_cvargs(arg_dict):
     namedtuple entries are instances of a named tuple constructed to have a
     field for each parameter.
     """
+    # NOTE: mypy has issues here. Type checking may be incorrect, and
+    # certain types have been manually annotated with warnings ignored.
 
     # the parameter names we are going to make a grid over
     param_names = list(arg_dict.keys())
@@ -230,21 +247,69 @@ def process_cvargs(arg_dict):
     values = [content for _, content in arg_dict.items()]
     cross_values = product(*values)
     to_return = []
-    C = namedtuple("CVArgs", param_names)
-    for values in cross_values:
-        key = C(**dict(zip(param_names, values)))
+    # mypy doesn't like dynamic named tuples like this
+    C = NamedTuple("CVArgs", param_names)  # type: ignore [misc]
+    for v in cross_values:
+        # mypy also has a bug for this named tuple usage
+        key = C(**dict(zip(param_names, v)))
         sub_args = {}
         for name in param_names:
             sub_args.update({name: getattr(key, name)})
         to_return.append((key, sub_args))
-    return to_return
+    # mypy is also confused here
+    return to_return  # type: ignore [return-value]
 
 
-def force_smoothness(array):
-    r"""Calculates the mean squared element of an array.
+def force_smoothness(array: np.ndarray) -> float:
+    r"""Calculate mean squared element of an array.
 
     This is proportional to a finite sum approximate of E[||x||^2_2], which
     is often used as a metric of quality for force-maps.
     """
+    return np.mean(array**2)
 
-    return np.mean(array ** 2)
+
+def mean(s: Collection[float]) -> Union[float, None]:
+    """Compute arithmetic mean.
+
+    Arguments:
+    ---------
+    s:
+        Collection of floats to calculate the mean of.
+
+    Returns:
+    -------
+    If s is empty, returns None; otherwise, returns mean.
+
+    Notes:
+    -----
+    This is needed as a function for type checking.
+    """
+    if len(s) == 0:
+        return None
+    return sum(s) / len(s)
+
+
+def sample_sd(s: Collection[float]) -> Union[float, None]:
+    """Compute sample standard deviation.
+
+    Arguments:
+    ---------
+    s:
+        Collection of floats to calculate the sample standard deviation of.
+
+    Returns:
+    -------
+    If s is empty, returns None; otherwise, returns mean.
+
+    Notes:
+    -----
+    This is needed as a function for type checking.
+    """
+    m = mean(s)
+    if m is None:
+        return None
+    sd = sum([(o - m) ** 2 for o in s])
+    sd /= len(s) - 1
+    sd = sd ** (0.5)
+    return sd

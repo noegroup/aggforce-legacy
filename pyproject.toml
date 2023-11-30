@@ -4,3 +4,75 @@ requires = [
     "wheel"
 ]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+select = [
+    "E",
+    "F",
+    "ARG",
+    "B",
+    "D",
+    "PLC",
+    "NPY",
+    "RUF",
+    "ANN",
+    "C",
+    "T",
+    "EXE",
+    "ISC",
+    "ICN",
+    "PIE",
+    "SLF",
+    "TCH",
+    "PTH",
+    "ERA",
+    "NPY",
+]
+ignore = ["ANN101","ANN102","ANN002","ANN003","ANN401","D213","D203","D406","T201"]
+
+# Allow autofix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+]
+per-file-ignores = {}
+
+# Same as Black.
+line-length = 88
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+target-version = "py39"
+
+[tool.mypy]
+show_error_codes = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+python_files = "*.py"
+testpaths = [ "src" ]
