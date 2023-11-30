@@ -1,4 +1,4 @@
-name: Lint with ruff, check with mypy
+name: Lint with ruff, then check with mypy
 
 on:
   push:
@@ -37,9 +37,9 @@ jobs:
           pip install .
       - name: Lint with ruff
         run: |
-          # ruff check using toml settings. Ignore unused argument errors.
           ruff check .
       - name: Type check with mypy
         run: |
-          # mypy check. Ignore uncheckable modules.
-          mypy . --ignore-missing-imports
+          # mypy check. Ignore uncheckable modules and don't compain about superfl.
+          # ignores. needed as we manually mark modules to ignore imports on.
+          mypy tests src examples --ignore-missing-imports --no-warn-unused-ignores
