@@ -1,4 +1,4 @@
-name: Lint with ruff, check with mypy
+name: Lint with ruff, then check with mypy
 
 on:
   push:
