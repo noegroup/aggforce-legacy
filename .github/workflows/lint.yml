@@ -42,4 +42,4 @@ jobs:
       - name: Type check with mypy
         run: |
           # mypy check. Ignore uncheckable modules.
-          mypy . --ignore-missing-imports
+          mypy test src examples

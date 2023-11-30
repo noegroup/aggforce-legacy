@@ -29,6 +29,8 @@ from typing import (
     Any,
     List,
     Sequence,
+    NamedTuple,
+    Union,
 )
 import re
 from pathlib import Path
@@ -386,12 +388,11 @@ def main() -> None:
     # more expression CV scanning set:
     # ruff doesn't like commented out code, but this is worth keeping.
 
-    # featurizers = gen_feater_grid( # noqa: ignore
-    #    inner=[0.0, 1.0, 2.0, 3.0],# noqa: ERA001
+    # featurizers =
+    # gen_feater_grid(inner=[0.0, 1.0, 2.0, 3.0],
     #    outer=[7.0, 8.0, 9.0], # noqa: ERA001
     #    n_basis=[8, 9], # noqa: ERA001
-    #    width=[0.7, 1.0, 1.3], # noqa: ERA001
-    # ) # noqa: ignore
+    #    width=[0.7, 1.0, 1.3], # noqa: ERA001)
     # l2_regs = [5e1, 1e2] # noqa: ERA001
 
     featurizers = gen_feater_grid(
@@ -404,13 +405,18 @@ def main() -> None:
     # we then combine the l2_regs and featurizer lists into a single dictionary.
     # This is that is passed to the cross validation function, which will scan
     # over each combination from the two list entries
-    cv_grid_basis = {"featurizer": featurizers, "l2_regularization": l2_regs}
+    cv_grid_basis: Dict[str, Union[List[p.GeneralizedFeaturizer], List[float]]] = {
+        "featurizer": featurizers,
+        "l2_regularization": l2_regs,
+    }
 
     # this is the call that actually does the cross validation over the possible
     # configurationally dependent map optimizations.
-    featted_results = ag.project_forces_grid_cv(
-        xyz=coords,
+    featted_results: Dict[str, Dict[NamedTuple, Any]] = ag.project_forces_grid_cv(
+        cv_arg_dict=cv_grid_basis,
         forces=forces,
+        xyz=coords,
+        n_folds=NFOLDS,
         config_mapping=cmap,
         constrained_inds=constraints,
         # again, we use our configurationally dependent method, but unlike
@@ -419,9 +425,7 @@ def main() -> None:
         method=p.qp_feat_linear_map,
         # passing in the various featurization functions and l2_regs to scan
         # over
-        cv_arg_dict=cv_grid_basis,
         kbt=kbt,
-        n_folds=NFOLDS,
     )
 
     # summary is a more readable DataFrame of the results of the cross
